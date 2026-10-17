@@ -107,10 +107,12 @@ export function summarizeTimings(rows) {
 }
 
 function parseArgs(args) {
-  const opts = { runs: 3, concurrency: 3, queueTimeoutMs: 15000, label: 'default', outDir: 'tts-benchmark-results',
+  const opts = { runs: 3, concurrency: 3, queueTimeoutMs: 90000, textLang: 'zh', promptLang: 'zh',
+    label: 'default', outDir: 'tts-benchmark-results',
     engine: fileURLToPath(new URL('../packages/voice-out/engines/tts-core.cjs', import.meta.url)) };
   const keys = { '--engine': 'engine', '--runs': 'runs', '--concurrency': 'concurrency', '--label': 'label',
-    '--out-dir': 'outDir', '--ref-audio': 'refAudio', '--prompt-text-file': 'promptTextFile', '--queue-timeout-ms': 'queueTimeoutMs' };
+    '--out-dir': 'outDir', '--ref-audio': 'refAudio', '--prompt-text-file': 'promptTextFile',
+    '--text-lang': 'textLang', '--prompt-lang': 'promptLang', '--queue-timeout-ms': 'queueTimeoutMs' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help') return { help: true };
     if (!keys[args[i]] || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`参数错误：${args[i]}`);
@@ -129,7 +131,8 @@ export function markdown(report) {
   const lines = ['# TTS 本机测速报告', '', `生成时间：${report.createdAt}；标签：${report.label}；状态：${report.status}`, '',
     '测量范围：适配器调用到完整 WAV 落盘，包含排队/启动；不含 QQ 转码、发送或收听延迟。',
     '首次调用不等于冷启动：服务此前可能已运行。P95 采用最近秩法，少量样本只能用于观察。', ''];
-  lines.push(`排队超时：${report.queueTimeoutMs}ms（默认与自动回复的15000ms一致）。`, '');
+  lines.push(`排队超时：${report.queueTimeoutMs}ms（默认与自动回复的90000ms一致）。`, '');
+  lines.push(`目标文本语言：${report.textLang}；参考原文语言：${report.promptLang}。`, '');
   if (report.blockedReason) lines.push(`未完成真实合成：${report.blockedReason}`, '');
   if (report.reference) {
     lines.push(`参考原文已提供：${report.reference.promptTextPresent}；参考音频时长：${report.reference.audio?.seconds ?? '无法分析'}秒。`, '');
@@ -148,7 +151,7 @@ export function markdown(report) {
       '| 阶段/文本 | 排队 | 探活/启动 | HTTP请求 | 落盘 | 合成槽占用 |', '|---|---|---|---|---|---|');
     for (const r of report.rows) lines.push(`| ${r.phase}/${r.caseId} | ${r.timings?.queueMs ?? '-'} | ${r.timings?.serverMs ?? '-'} | ${r.timings?.requestMs ?? '-'} | ${r.timings?.saveMs ?? '-'} | ${r.timings?.slotMs ?? '-'} |`);
     lines.push('', '后续请求的排队预算需按本机合成槽占用P95及并发数评估。例如三请求串行时，最后一条可能等待前两条完成。',
-      '15秒是默认响应预算，并非CPU/GPU通用性能保证。30–45秒只作为待实测的候选，不能在没有数据时自动调高。超时失败仍计入失败率。', '');
+      '90秒默认预算基于DS反馈中15秒排队超时、60秒三请求成功的结果保守调整，仍需在本机复测。超时失败仍计入失败率。', '');
     lines.push('', '## 试听清单', '', '客观波形指标不能判断可懂度、自然度、音色相似度或漏字；以下项目需要逐段试听。', '');
     for (const c of CASES) {
       lines.push(`- ${c.id}：${c.text}`, `  - 关注：${c.listenFor}`);
@@ -162,7 +165,7 @@ export function markdown(report) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log('node scripts/benchmark-tts.mjs [--engine tts-core.cjs] [--runs 3] [--concurrency 3] [--queue-timeout-ms 15000] [--label default] [--out-dir directory] [--ref-audio reference.wav] [--prompt-text-file reference.txt]');
+    console.log('node scripts/benchmark-tts.mjs [--engine tts-core.cjs] [--runs 3] [--concurrency 3] [--queue-timeout-ms 90000] [--text-lang zh] [--prompt-lang zh] [--label default] [--out-dir directory] [--ref-audio reference.wav] [--prompt-text-file reference.txt]');
     return;
   }
   const outDir = path.resolve(opts.outDir);
@@ -171,7 +174,8 @@ async function main() {
   const runDir = fs.mkdtempSync(path.join(outDir, 'run-'));
   const report = { createdAt: new Date().toISOString(), label: opts.label, status: 'blocked',
     runtime: { node: process.version, platform: process.platform, cpu: os.cpus()[0]?.model, cpuCount: os.cpus().length },
-    runs: opts.runs, concurrency: opts.concurrency, queueTimeoutMs: opts.queueTimeoutMs, rows: [], summary: {} };
+    runs: opts.runs, concurrency: opts.concurrency, queueTimeoutMs: opts.queueTimeoutMs,
+    textLang: opts.textLang, promptLang: opts.promptLang, rows: [], summary: {} };
   let engine;
   try {
     engine = require(path.resolve(opts.engine));
@@ -186,9 +190,10 @@ async function main() {
         report.reference.warnings.push('参考片段不在建议的3~10秒范围内');
       }
     } catch (error) { report.reference.error = String(error.message); }
-    if (!report.reference.promptTextPresent) report.reference.warnings.push('未提供参考原文，音色稳定性需重点试听');
+    if (!report.reference.promptTextPresent) throw new Error('缺少参考原文：V3/v4 需要非空 prompt_text，请用 --prompt-text-file 提供对应原文');
     report.serviceAlreadyRunning = typeof engine.probe === 'function' ? await engine.probe(2500) : undefined;
     const options = { refAudio, ...(promptText !== undefined ? { promptText } : {}),
+      textLang: opts.textLang, promptLang: opts.promptLang,
       outDir: runDir, queueTimeoutMs: opts.queueTimeoutMs, log: (m) => console.log(String(m)) };
     const run = async (phase, c) => {
       console.log(`[${phase}/${c.id}] 合成 ${[...c.text].length} 字符…`);

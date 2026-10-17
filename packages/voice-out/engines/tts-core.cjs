@@ -14,7 +14,7 @@
  *
  * 参考音频（音色来源）放本目录 ref/ 下：
  *   - ref/sally_ref.wav   —— 必填，3~10 秒、单人、无 BGM/混响的干净人声
- *   - ref/sally_ref.txt   —— 强烈建议：该段音频对应的原文（零样本克隆给了明显更稳）
+ *   - ref/sally_ref.txt   —— 必填：该段音频对应的逐字原文（V3/v4 需要非空 prompt_text）
  * 用 cutReference() 可以从番剧文件里切出参考片段。
  */
 const fs = require('fs');
@@ -68,14 +68,14 @@ function exists(f) {
   try { return fs.existsSync(f); } catch { return false; }
 }
 
-/** 整合包/运行时/配置/参考音频是否齐备。 */
+/** 默认整合包/运行时/配置/参考音频与非空原文是否齐备。 */
 function available() {
-  return exists(PY) && exists(API) && exists(CFG) && exists(DEFAULT_REF);
+  return exists(PY) && exists(API) && exists(CFG) && exists(DEFAULT_REF) && Boolean(referenceText());
 }
 
-/** 只差参考音频时为 true —— 用来给用户一句明确的提示。 */
+/** 运行依赖齐备，但缺参考音频或非空原文时为 true。 */
 function needsReference() {
-  return exists(PY) && exists(API) && exists(CFG) && !exists(DEFAULT_REF);
+  return exists(PY) && exists(API) && exists(CFG) && (!exists(DEFAULT_REF) || !referenceText());
 }
 
 function referenceText() {
@@ -86,7 +86,9 @@ function referenceText() {
   }
 }
 
-/** 无参数 /tts 会回 400/422；5xx、404 等不代表服务就绪。 */
+/** 仅探测 HTTP 存活，不验证推理能力：部分 api_v2 的裸 GET /tts 返回 500。
+ * 任一 HTTP 响应都说明端口已被占用，不能据此再启动进程；业务错误由合成 POST 透传。
+ */
 async function probe(timeoutMs = 2500, signal) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -95,8 +97,8 @@ async function probe(timeoutMs = 2500, signal) {
   else signal?.addEventListener('abort', abort, { once: true });
   try {
     const res = await fetch(`${BASE}/tts`, { signal: controller.signal });
-    await res.body?.cancel();
-    return res.ok || res.status === 400 || res.status === 422;
+    try { await res.body?.cancel(); } catch {} // 已收到响应，释放响应体失败也不能触发重复启动。
+    return true;
   } catch {
     return false;
   } finally {
@@ -106,15 +108,15 @@ async function probe(timeoutMs = 2500, signal) {
 }
 
 /**
- * 确保 TTS 服务在跑；不在就拉起来并等它 ready。
- * 首次启动要加载模型，实测较慢（几十秒级），所以等待上限给了 3 分钟。
+ * 确保端口有 HTTP 响应；连接失败时尝试启动本地服务。
+ * 默认给模型加载预留 5 分钟；具体冷启动耗时需在部署机器上验证。
  * @param {{log?: Function, waitMs?: number}} [options]
  * @returns {Promise<{ok: boolean, started: boolean, ms?: number}>}
  */
 async function ensureServer(options = {}) {
   if (serverStarting) return serverStarting;
   const log = typeof options.log === 'function' ? options.log : () => {};
-  const waitMs = positiveInteger(options.waitMs, 180000, 'waitMs');
+  const waitMs = positiveInteger(options.waitMs, 300000, 'waitMs');
   const controller = new AbortController();
   startupController = controller;
   let child = null;
@@ -184,7 +186,7 @@ async function ensureServer(options = {}) {
   return serverStarting;
 }
 
-/** 预热：把服务拉起来（第一次合成就不必再等模型加载）。 */
+/** 预热：确保服务有 HTTP 响应；不执行推理，首次合成仍可能有模型预热开销。 */
 async function warmup(options = {}) {
   try {
     await ensureServer(options);
@@ -209,9 +211,13 @@ async function synthesize(text, options = {}) {
   if (!exists(refAudio)) {
     throw new Error(`参考音频不存在：${refAudio}（把干净人声放到 ref/sally_ref.wav）`);
   }
+  const promptText = String(options.promptText ?? referenceText()).replace(/\s+/gu, ' ').trim();
+  if (!promptText) {
+    throw new Error('缺少参考原文：GPT-SoVITS V3/v4 需要非空 prompt_text，请填写 ref/sally_ref.txt 或传入 promptText（与参考音频逐字对应）');
+  }
   const timeoutMs = positiveInteger(options.timeoutMs, 120000, 'timeoutMs');
-  const queueTimeoutMs = positiveInteger(options.queueTimeoutMs, timeoutMs, 'queueTimeoutMs');
-  const startTimeoutMs = positiveInteger(options.startTimeoutMs, 180000, 'startTimeoutMs');
+  const queueTimeoutMs = positiveInteger(options.queueTimeoutMs, 90000, 'queueTimeoutMs');
+  const startTimeoutMs = positiveInteger(options.startTimeoutMs, 300000, 'startTimeoutMs');
   const maxBytes = positiveInteger(options.maxBytes, 20 * 1024 * 1024, 'maxBytes');
   const queuedAt = performance.now();
   const release = await acquireSynthesis(queueTimeoutMs);
@@ -224,7 +230,7 @@ async function synthesize(text, options = {}) {
       text: clean,
       text_lang: options.textLang || 'zh',
       ref_audio_path: path.resolve(refAudio),
-      prompt_text: options.promptText ?? referenceText(),
+      prompt_text: promptText,
       prompt_lang: options.promptLang || 'zh',
       text_split_method: options.splitMethod || 'cut5',
       batch_size: 1,

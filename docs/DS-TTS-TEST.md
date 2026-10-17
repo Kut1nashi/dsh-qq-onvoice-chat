@@ -1,7 +1,8 @@
 # 交给 DS 的 TTS 测试任务
 
 请在用户实际运行 GPT-SoVITS 的本机测试本项目的 TTS 改进，提交可复核的结果。
-本次云端只完成离线验证和固定响应开销测量，真实模型速度与音质尚未测量。
+已收到 `tts-realtest-feedback-20261018.md`：测试旧提交 `494449c5`，确认了探活回归与15秒排队超时。
+本轮已据此修复；云端只做回归验证，最新修复尚需实机复测，听感未评估。
 不要把模拟结果、通过的单元测试或首次请求耗时写成真实冷启动和音质结论。
 用户确认的网关发行版本为 `@snowluma/runtime v1.14.20`。已核对对应GitHub标签中的
 内联音频支持与await发送链路；仍需在该发行包及实际bridge.js中完成本节的端到端验证。
@@ -16,6 +17,48 @@
 > 不能测试的项目标记 BLOCKED，并写清缺少的依赖；无法听取音频则把听感标记为未评估。
 > 输出 `DS-TTS-RESULT.md`，附原始报告位置、复现命令、问题清单及有证据支持的优化建议。
 
+## 本轮优先复测清单
+
+请重新下载PR #1当前分支，勿复用 `494449c5` 解压版。若无Git，用引擎SHA256和包内清单记录版本。
+先保留当前外部API，不额外启动模型实例；机器内存不足时继续跳过冷启动。
+预检以下四处应为新值：引擎、`voice-out.tts.js`、`config.example.json`、测速脚本。
+默认应为排队90000ms、启动300000ms、桥接最多80字符；HTTP推理仍120000ms。
+实际bridge的旧显式配置需同步修改，默认值不会覆盖已设置的15000/180000/200。
+
+| 优先级 | 验证 | 通过条件 |
+|---|---|---|
+| P0 | 在既有服务仍运行、裸GET `/tts` 为500的条件下调用新版 | `probe()`为true、`ensureServer().started`为false；合法POST出WAV，无额外Python进程/端口占用错误 |
+| P0 | 合法POST本身返回400/500时 | 透传服务端原因并退回文本，不把业务错误变成第二次启动 |
+| P1 | 默认90秒预算三条并发短句 | 分别记录 `queueMs`、`slotMs`、总耗时、成功/失败；目标3/3，失败也完整保留 |
+| P1 | 实际桥接中80/81字符边界 | 80字符进入合成，81字符直接完整发文本、不截断、不合成；若测纯逻辑，不发QQ |
+| P1 | 缺失/空白参考原文 | `available()` false、`needsReference()` true；直接合成在联网/启动前提示原文，显式非空 `promptText`可覆盖默认txt |
+| P2 | 语言与听感 | 参考原文为日语时设 `promptLang=ja`、中文目标 `textLang=zh`，保存设置和WAV；单独记录与旧语言条件的差异 |
+
+已有本地API时可先在仓库根目录检查复用（默认参考材料须已就位）：
+
+```powershell
+Get-NetTCPConnection -LocalPort 9880 -State Listen | Select-Object OwningProcess
+node -e "const t=require('./packages/voice-out/engines/tts-core.cjs'); (async()=>{const alive=await t.probe();console.log('probe=',alive);if(!alive)throw new Error('端口未响应，请先检查现有服务');console.log('server=',await t.ensureServer());})().catch(e=>{console.error(e.message);process.exitCode=1}).finally(()=>t.stop());"
+Get-NetTCPConnection -LocalPort 9880 -State Listen | Select-Object OwningProcess
+```
+
+应输出 `probe=true`、`started:false`，前后监听进程一致。若 `probe=false`，先检查地址、端口和代码哈希，
+不要反复执行以尝试加载第二套模型。此步骤只证实HTTP存活，不代表推理成功。
+本轮离线的真实回环HTTP用例使用固定波形，仍须用上述实际API及真实合成复核。
+
+日语参考材料的主要复跑命令（先设置下一节的路径变量）：
+
+```powershell
+node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --prompt-lang ja --text-lang zh --label feedback-fix --runs 2 --concurrency 3
+```
+
+共12次合成：首次1次、4语料各2次、并发短句3次。确认报告显示90000ms及ja/zh，
+实际耗时可能数分钟；107字符长句用于引擎压力观察，不受自动回复80字符门槛限制。
+若要与旧报告比较速度，先确认其语言配置；无法确认则标记未完成同条件A/B。
+如需重现旧队列问题，另加 `--queue-timeout-ms 15000` 并改标签；不要覆盖成功报告。
+
+本轮尚未证明90秒在这台机器复测通过，也未测试300秒冷启动；不得预填PASS。
+
 ## 1. 确认环境与代码
 
 在仓库根目录执行：
@@ -29,7 +72,8 @@ node --check scripts/benchmark-tts.mjs
 ```
 
 代码包可能没有 `.git`；这种情况下用包内 SHA256 清单和引擎文件哈希记录版本。
-需要 Node.js ≥18。离线测试应包含25项冒烟检查、32项 TTS 回归和7项测速工具测试。
+需要Node.js ≥18。套件应包含25项冒烟检查、36项TTS回归和8项测速工具测试（共69项）。
+云端因沙箱EPERM跳过1项回环HTTP监听，其余68项通过；本机/CI应补测且不跳过该用例。
 如果运行器只按文件汇总，可以单独执行：
 
 ```bash
@@ -50,7 +94,7 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 ## 2. 准备同一套模型与参考音频
 
 确认整合包里有 `api_v2.py`、推理配置、模型与可用Python。
-参考音频建议3~10秒、干净单人声，其原文必须与音频逐字对应。
+参考音频建议3~10秒、干净单人声，非空原文必须与音频逐字对应；V3/v4拒绝空原文。
 先确认样本能打开，记录采样率、时长、背景声和是否有第二位说话人。
 
 Windows PowerShell 示例，执行前替换占位路径：
@@ -66,10 +110,10 @@ Linux/macOS 若使用系统Python/ffmpeg，还需设置 `VOICE_TTS_PYTHON`、`VO
 为可执行文件完整路径，不能只填裸命令名。默认服务地址是 `127.0.0.1:9880`，
 如实际不同，设置 `VOICE_TTS_HOST` / `VOICE_TTS_PORT`。
 
-以下示例使用仓库中的新适配器，显式传参考音频，避免误用旧部署目录里的代码：
+以下以日语参考为例，使用仓库中新适配器并显式传参考音频，避免误用旧部署目录里的代码：
 
 ```powershell
-node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --label after --runs 3 --concurrency 3
+node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --prompt-lang ja --text-lang zh --label after --runs 3 --concurrency 3
 ```
 
 也可在已配置好默认参考文件的环境直接执行：
@@ -80,7 +124,8 @@ npm run bench:tts -- --label after --runs 3 --concurrency 3
 
 默认提交16次合成：1次首次短句、4种语料各3轮、3条同时提交的短句。
 只生成本地文件，不调用QQ网关。输出在 `tts-benchmark-results/run-*/`，保留所有报告与试听文件。
-每次调用超时可包含180秒启动、120秒HTTP推理与15秒排队预算，完成整组测试可能需要数分钟。
+每次调用超时可包含300秒启动、120秒HTTP推理与90秒排队预算，完成整组测试可能需要数分钟。
+原文与目标语言默认均为zh；日语参考必须加 `--prompt-lang ja`，实际bridge也应同步 `tts.promptLang`。
 依赖缺失或首条失败会提前结束并返回非零退出码；保存 `blocked` 报告，不要伪造后续成绩。
 
 ## 3. 首次、后续与并发测试
@@ -90,7 +135,7 @@ npm run bench:tts -- --label after --runs 3 --concurrency 3
 | 首次调用 | 记录测试前服务是否已响应，执行首次短句 | 总耗时、适配器ms、是否含启动；已运行服务不能称冷启动 |
 | 真正冷启动 | 在方便时手动停止专用于测试的服务后重测 | 记录从启动到完整WAV落盘，禁止擅自结束生产服务 |
 | 后续合成 | 按4类语料重复测量 | P50/P95、RTF、错误次数、输出时长 |
-| 默认并发预算 | 新适配器同时提交3条短句，排队15000ms | 各自总耗时、成功/超时/错误，确认没有死锁 |
+| 默认并发预算 | 新适配器同时提交3条短句，排队90000ms | 各自总耗时、成功/超时/错误，确认没有死锁 |
 | 长队列观察 | 需要时加 `--queue-timeout-ms 120000` | 只用于观察完成顺序，不能替代默认预算的失败率 |
 
 当前 `adapterMs` 只含HTTP与落盘；`wallMs`还包含排队、探活与启动。
@@ -100,9 +145,9 @@ npm run bench:tts -- --label after --runs 3 --concurrency 3
 RTF小于1表示生成速度快于播放速度；实际可接受延迟需结合用户硬件和回复长度判断。
 默认只有少量样本，P95仅供观察，需要更稳定的数据时增加 `--runs`，最大30。
 报告需分别列成功样本延迟和失败率，不能通过剔除超时请求美化性能。
-对CPU或慢设备，额外比较15000/30000/45000ms排队预算；根据真实 `slotMs` / `queueMs` 的P95、
+对CPU或慢设备，额外比较15000/60000/90000ms排队预算；根据真实 `slotMs` / `queueMs` 的P95、
 用户能接受的等待与降级率确定配置。三条串行请求中最后一条可能等待前两条完成，
-不能在没有真实数据时直接宣称15秒足够或30–45秒更合适。
+DS旧提交反馈已证实15秒预算1/3成功、60秒3/3成功；本轮90秒是保守选择，仍须复测。
 
 ## 4. 与旧版做公平对照
 
@@ -113,15 +158,16 @@ git worktree add --detach ../dsh-tts-before 2bf711a386ec8eb6452c29b9d6217f2e30b8
 ```
 
 然后在当前仓库用同一个新测速脚本测旧适配器；明确设置 `VOICE_TTS_GSV_DIR`，
-显式传入同一个参考音频与原文，避免旧版按不同目录寻找引擎。
+显式传入同一个参考音频与原文、相同的目标和参考语言，避免旧版按不同目录寻找引擎。
 先用单请求对照，防止把并发策略变化混入推理速度比较：
 
 ```powershell
-node scripts/benchmark-tts.mjs --engine ../dsh-tts-before/packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --label before --runs 3 --concurrency 1
-node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --label after --runs 3 --concurrency 1
+node scripts/benchmark-tts.mjs --engine ../dsh-tts-before/packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --prompt-lang ja --text-lang zh --label before --runs 3 --concurrency 1
+node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs --ref-audio "$refAudio" --prompt-text-file "$refText" --prompt-lang ja --text-lang zh --label after --runs 3 --concurrency 1
 ```
 
-保持相同GPU、模型、精度、参考音频、原文和服务状态，交替重复两版测试，避免其它GPU负载。
+以上以日语参考为例，中文原文将两条命令均改成 `--prompt-lang zh`。
+保持相同GPU、模型、精度、参考音频、原文、语言和服务状态，交替重复两版测试，避免其它GPU负载。
 不要拿旧版冷启动与新版已预热比较。对并发结果单独讨论：旧版可能同时访问模型，
 新版是单实例串行推理；吞吐、排队和状态隔离是不同指标。
 没有旧版可运行时只提交当前版基准，明确“未做真实前后对照”。
@@ -153,7 +199,7 @@ node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs 
 确认 `voiceCfg()` 返回 `.tts`，通过日志或测试确认自定义 `queueTimeoutMs` 确实传入引擎。
 检查以下行为：
 
-- 合成失败、服务不可用、参考音频缺失、排队超时：回复退回文本，不丢消息。
+- 合成失败、服务不可用、参考音频/原文缺失、排队超时：回复退回文本，不丢消息。
 - 合成后变为静默、关闭开关或额度不足：不继续发语音；产物清理。
 - 发送失败也清理本次合成文件；成功发送后才记语音额度。
 - 普通文本概率未命中：不触发引擎；对方语音消息仍按原规则触发。
@@ -173,8 +219,8 @@ node scripts/benchmark-tts.mjs --engine packages/voice-out/engines/tts-core.cjs 
    若部署版本不支持内联音频，应退回文本并先修正接线，不能默默退回路径发送后继续立即删除文件。
 
 未获得真实bridge和网关、缺模型/参考音频或没有实际发送授权时，以上项目标记BLOCKED。
-DS截图所述“系统Python3.14有torch，但缺fastapi/uvicorn”不代表整合包已就绪；
-还缺runtime、模型、参考音频和ffmpeg时，先按ENV-SETUP准备完整环境，再测真实推理与听感。
+早期截图所述依赖缺失属于上一轮环境边界；后续实机报告已实际运行完整引擎，
+本轮应继续复用该环境，不要把早期阻塞当作当前状态或据此重装模型。
 
 本任务默认只做本地合成及可逆验证。实际发QQ消息需用户指定测试会话并明确要求发送。
 若获准做端到端测试，分别记录WAV落盘、网关转码、发送响应和回读 `verified`；
@@ -200,7 +246,9 @@ DS截图所述“系统Python3.14有torch，但缺fastapi/uvicorn”不代表整
 - 实际测试的引擎路径/是否为新版：
 - GPU/显存/模型/精度/服务版本：
 - 参考音频时长/采样率/原文是否匹配：
+- 目标textLang / 参考promptLang（是否与旧报告一致）：
 - 离线测试：PASS / FAIL / BLOCKED（附命令和错误）
+- 裸GET状态 / probe结果 / ensureServer.started / 前后监听PID及是否多起进程：
 - 首次调用是否真正冷启动/总耗时：
 - 后续 short/medium/long/mixed 的P50/P95、RTF、成功数/总数：
 - 并发3条各自耗时/排队预算/成功或错误：

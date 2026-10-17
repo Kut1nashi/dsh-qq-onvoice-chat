@@ -75,8 +75,9 @@ test('benchmark command produces playable files and a report using a fixture ada
   fs.writeFileSync(path.join(tmp, 'ref.wav'), signal());
   fs.writeFileSync(path.join(tmp, 'engine.cjs'), `
 const fs = require('fs'); const path = require('path'); let counter = 0;
-module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), probe: async () => true, stop() {},
+module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), referenceText: () => '参考原文', probe: async () => true, stop() {},
   async synthesize(text, options) {
+    if (options.promptLang !== 'ja' || options.textLang !== 'zh') throw new Error('language options did not reach the adapter');
     const out = path.join(options.outDir, 'generated-' + (++counter) + '.wav');
     fs.copyFileSync(this.DEFAULT_REF, out); return { path: out, ms: 1 };
   }
@@ -84,11 +85,15 @@ module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), probe: async ()
 `);
   const script = fileURLToPath(new URL('../scripts/benchmark-tts.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, '--engine', path.join(tmp, 'engine.cjs'),
-    '--runs', '1', '--concurrency', '2', '--out-dir', path.join(tmp, 'results')], { encoding: 'utf8' });
+    '--runs', '1', '--concurrency', '2', '--prompt-lang', 'ja', '--text-lang', 'zh',
+    '--out-dir', path.join(tmp, 'results')], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const dir = path.join(tmp, 'results', fs.readdirSync(path.join(tmp, 'results'))[0]);
   const report = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
   assert.equal(report.status, 'completed');
+  assert.equal(report.queueTimeoutMs, 90000);
+  assert.equal(report.promptLang, 'ja');
+  assert.equal(report.textLang, 'zh');
   assert.equal(report.rows.length, 7);
   assert.equal(report.rows.filter((r) => r.phase.startsWith('parallel-')).length, 2);
   for (const row of report.rows) assert.equal(analyzeWav(fs.readFileSync(path.join(dir, row.file))).seconds, 1.3);
@@ -109,4 +114,24 @@ test('missing reference produces a blocked report and no simulated synthesis mea
   assert.equal(report.status, 'blocked');
   assert.equal(report.rows.length, 0);
   assert.match(report.blockedReason, /缺少参考音频/);
+});
+
+test('empty reference transcript produces a blocked report before probing or invoking the engine', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-bench-transcript-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(tmp, 'ref.wav'), signal());
+  fs.writeFileSync(path.join(tmp, 'engine.cjs'), `
+const path = require('path');
+module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), referenceText: () => ${JSON.stringify(' \n\t ')},
+  probe() { throw new Error('probe must not run'); }, synthesize() { throw new Error('synthesis must not run'); }, stop() {} };
+`);
+  const script = fileURLToPath(new URL('../scripts/benchmark-tts.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [script, '--engine', path.join(tmp, 'engine.cjs'),
+    '--out-dir', path.join(tmp, 'results')], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  const dir = path.join(tmp, 'results', fs.readdirSync(path.join(tmp, 'results'))[0]);
+  const report = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
+  assert.equal(report.status, 'blocked');
+  assert.equal(report.rows.length, 0);
+  assert.match(report.blockedReason, /缺少参考原文.*--prompt-text-file/);
 });

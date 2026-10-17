@@ -42,7 +42,7 @@
     if (shouldBlockSilentReply(key)) return { sent: false, reason: 'silent' };
     const clean = String(text ?? '').trim();
     if (!clean) return { sent: false, reason: 'empty' };
-    if (clean.length > (Number(tts.maxChars) || 200)) return { sent: false, reason: 'too-long' };
+    if (clean.length > (Number(tts.maxChars) || 80)) return { sent: false, reason: 'too-long' };
     const answeringVoice = lastIncomingWasVoice(key);
     const probability = Number(tts.replyProbability ?? 0.05);
     if (!answeringVoice && !(Math.random() < probability)) return { sent: false, reason: 'probability' };
@@ -66,8 +66,8 @@
         textLang: tts.textLang || 'zh',
         promptLang: tts.promptLang || 'zh',
         timeoutMs: Number(tts.timeoutMs) || 120000,
-        startTimeoutMs: Number(tts.startTimeoutMs) || 180000,
-        queueTimeoutMs: Number(tts.queueTimeoutMs) || 15000,
+        startTimeoutMs: Number(tts.startTimeoutMs) || 300000,
+        queueTimeoutMs: Number(tts.queueTimeoutMs) || 90000,
         maxBytes: vc.maxBytes,
         log: (m) => log(String(m))
       });

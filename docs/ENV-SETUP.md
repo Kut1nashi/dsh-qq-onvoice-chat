@@ -14,7 +14,7 @@
 | GPT-SoVITS 整合包 | 本机用的是 **v4 整合包**（`GPT-SoVITS-v4-20250529.7z`，**7.5 GB**，含 portable Python 运行时和模型） |
 | 整合包内路径 | 适配器要能读到 `<整合包>/runtime/python.exe`、`<整合包>/api_v2.py`、`<整合包>/ffmpeg.exe`、`<整合包>/GPT_SoVITS/configs/tts_infer.yaml` |
 | 参考音频 | **必填**：3~10 秒、单人、无 BGM/混响的干净人声，放 `<engine>/ref/sally_ref.wav` |
-| 参考文本 | 强烈建议：上面那段音频的逐字原文，放 `<engine>/ref/sally_ref.txt`（给了它克隆明显更稳） |
+| 参考文本 | 必填：上面那段音频的逐字原文，放 `<engine>/ref/sally_ref.txt`；V3/v4 不接受空 `prompt_text` |
 | GPU | 建议 NVIDIA 显卡；CPU 也能跑但很慢 |
 | 端口 | 适配器默认拉起到 `127.0.0.1:9880`（`VOICE_TTS_HOST` / `VOICE_TTS_PORT` 可覆盖） |
 

@@ -22,10 +22,10 @@
         "replyProbability": 0.05,
         "textLang": "zh",
         "promptLang": "zh",
-        "maxChars": 200,
+        "maxChars": 80,
         "timeoutMs": 120000,
-        "startTimeoutMs": 180000,
-        "queueTimeoutMs": 15000
+        "startTimeoutMs": 300000,
+        "queueTimeoutMs": 90000
       }
     }
   }

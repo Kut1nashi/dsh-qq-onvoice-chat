@@ -5,6 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { encodeAudioFile, cleanupTemp } from '../packages/voice-out/lib/voice-core.js';
@@ -70,21 +71,61 @@ function engine(t, { fetch = async () => new Response(null, { status: 400 }), sp
   return { api, root, children, calls };
 }
 
-test('probe accepts validation responses, rejects failed endpoints, and cancels bodies', async (t) => {
-  for (const status of [200, 400, 422, 404, 500, 503]) {
+test('probe treats every HTTP response as port liveness and cancels bodies', async (t) => {
+  for (const status of [200, 400, 405, 422, 404, 500, 503]) {
     let cancelled = false;
     const { api } = engine(t, { fetch: async () => ({
       status, ok: status === 200, body: { cancel: async () => { cancelled = true; } }
     }) });
-    assert.equal(await api.probe(), [200, 400, 422].includes(status));
+    assert.equal(await api.probe(), true);
     assert.equal(cancelled, true);
   }
+  const offline = engine(t, { fetch: async () => { throw new Error('ECONNREFUSED'); } });
+  assert.equal(await offline.api.probe(), false);
+  const cancelFailed = engine(t, { fetch: async () => ({ status: 500, body: {
+    cancel: async () => { throw new Error('body already closed'); }
+  } }) });
+  assert.equal(await cancelFailed.api.probe(), true);
+});
+
+test('real HTTP GET 500 reuses the external endpoint; POST success and errors never spawn a duplicate', async (t) => {
+  let posts = 0;
+  const server = createServer((req, res) => {
+    req.resume();
+    if (req.method === 'POST' && ++posts === 1) {
+      res.writeHead(200, { 'content-type': 'audio/wav' }); res.end(wav());
+    } else {
+      res.writeHead(500); res.end('model not ready');
+    }
+  });
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  } catch (error) {
+    if (error.code !== 'EPERM' || process.env.CI) throw error;
+    t.skip('sandbox forbids loopback listening; this HTTP transport case must also pass in CI/on the model host');
+    return;
+  }
+  t.after(() => {
+    const closed = new Promise((resolve) => server.close(resolve));
+    server.closeAllConnections();
+    return closed;
+  });
+  const { api, calls } = engine(t, { fetch: globalThis.fetch, env: { VOICE_TTS_PORT: String(server.address().port) } });
+  assert.equal(await api.probe(), true);
+  assert.equal((await api.ensureServer()).started, false);
+  assert.equal((await api.synthesize('你好')).bytes, wav().length);
+  await assert.rejects(api.synthesize('重试'), /TTS HTTP 500.*model not ready/);
+  api.stop();
+  assert.equal(calls.length, 0);
+  assert.equal(server.listening, true);
 });
 
 test('existing external server is reused and never terminated by stop', async (t) => {
-  const { api, calls } = engine(t);
+  const { api, calls } = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(wav()) : new Response(null, { status: 500 }) });
   const ready = await api.ensureServer();
   assert.equal(ready.started, false);
+  assert.equal((await api.synthesize('existing server')).bytes, wav().length);
   api.stop();
   assert.equal(calls.length, 0);
 });
@@ -128,8 +169,8 @@ test('spawn error is a rejection, failed startup is cleaned up, and retry works'
 test('an unhealthy managed server does not spawn duplicates or lose its process handle', async (t) => {
   let probes = 0; let degraded = false;
   const { api, calls, children } = engine(t, { fetch: async () => {
-    if (++probes === 1) throw new Error('offline');
-    return new Response(null, { status: degraded ? 500 : 400 });
+    if (++probes === 1 || degraded) throw new Error('offline');
+    return new Response(null, { status: 400 });
   } });
   await api.ensureServer();
   degraded = true;
@@ -192,14 +233,14 @@ test('synthesis sends JSON POST and writes the returned WAV with a unique absolu
     return opts.method === 'POST' ? new Response(wav()) : new Response(null, { status: 400 });
   } });
   const text = '你好 & ? #\n世界'.repeat(500);
-  const first = await api.synthesize(` ${text} `, { promptText: '', splitMethod: 'cut2' });
+  const first = await api.synthesize(` ${text} `, { promptText: '参考\n 原文', splitMethod: 'cut2' });
   const second = await api.synthesize('再次合成');
   const request = requests.find((r) => r.method === 'POST');
   const payload = JSON.parse(request.body);
   assert.equal(request.url, 'http://127.0.0.1:9880/tts');
   assert.equal(request.headers['content-type'], 'application/json');
   assert.equal(payload.text, text);
-  assert.equal(payload.prompt_text, '');
+  assert.equal(payload.prompt_text, '参考 原文');
   assert.equal(payload.text_split_method, 'cut2');
   assert.equal(payload.streaming_mode, false);
   assert.equal(payload.batch_size, 1);
@@ -208,6 +249,33 @@ test('synthesis sends JSON POST and writes the returned WAV with a unique absolu
   assert.notEqual(first.path, second.path);
   assert.deepEqual(fs.readFileSync(first.path), wav());
   assert.equal(first.bytes, wav().length);
+});
+
+test('missing, empty or whitespace-only default reference text fails before any network or startup work', async (t) => {
+  for (const text of [null, '', ' \n\t\uFEFF ']) {
+    let fetched = false;
+    const { api, root, calls } = engine(t, { fetch: async () => { fetched = true; },
+      files: { 'ref/sally_ref.txt': text ?? '' } });
+    if (text === null) fs.unlinkSync(path.join(root, 'ref/sally_ref.txt'));
+    assert.equal(api.available(), false);
+    assert.equal(api.needsReference(), true);
+    await assert.rejects(api.synthesize('你好'), /V3\/v4.*ref\/sally_ref.txt.*promptText/);
+    assert.equal(fetched, false);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('an explicit reference transcript works without the default text file; explicit empty text is rejected', async (t) => {
+  const { api, root } = engine(t, { fetch: async (_, opts) => {
+    if (opts.method !== 'POST') return new Response(null, { status: 500 });
+    assert.equal(JSON.parse(opts.body).prompt_text, '同一音频原文');
+    return new Response(wav());
+  } });
+  assert.equal(api.available(), true);
+  assert.equal(api.needsReference(), false);
+  await assert.rejects(api.synthesize('你好', { promptText: ' \n ' }), /缺少参考原文/);
+  fs.unlinkSync(path.join(root, 'ref/sally_ref.txt'));
+  assert.equal((await api.synthesize('你好', { promptText: ' 同一音频原文 ' })).bytes, wav().length);
 });
 
 test('empty input, missing reference and invalid limits fail before network work', async (t) => {
@@ -395,6 +463,27 @@ function bridge(overrides = {}) {
     { filename: 'voice-out.tts.js' });
   return { reply: context.maybeReplyAsVoiceV2, cleaned, sent, commits: () => commits };
 }
+
+test('bridge applies the slow-host defaults, keeps explicit budgets and skips replies over the text limit', async () => {
+  const options = [];
+  const adapter = { available: () => true, synthesize: async (_, opts) => {
+    options.push(opts); return { path: '/tmp/generated.wav', bytes: 46 };
+  } };
+  const b = bridge({ ttsCoreModule: adapter });
+  assert.equal((await b.reply('private:123', '文'.repeat(81))).reason, 'too-long');
+  assert.equal(options.length, 0);
+  assert.equal((await b.reply('private:123', '文'.repeat(80))).sent, true);
+  assert.equal(options[0].queueTimeoutMs, 90000);
+  assert.equal(options[0].startTimeoutMs, 300000);
+  assert.equal(options[0].timeoutMs, 120000);
+  const configured = bridge({ ttsCoreModule: adapter, voiceCfg: () => ({ tts: {
+    replyProbability: 1, maxChars: 100, queueTimeoutMs: 60000, startTimeoutMs: 240000, timeoutMs: 200000
+  } }) });
+  assert.equal((await configured.reply('private:123', '文'.repeat(81))).sent, true);
+  assert.equal(options[1].queueTimeoutMs, 60000);
+  assert.equal(options[1].startTimeoutMs, 240000);
+  assert.equal(options[1].timeoutMs, 200000);
+});
 
 test('bridge cleans up generated files after successful send and commits once', async () => {
   const b = bridge();
