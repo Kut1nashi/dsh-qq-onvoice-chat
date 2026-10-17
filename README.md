@@ -107,7 +107,7 @@ node -e "const s=require('./packages/voice-in/engines/stt-core.cjs'); console.lo
 node packages/voice-out/cli/send-voice.mjs list-voice
 ```
 
-本仓库自带可离线跑的冒烟测试：
+本仓库自带可离线跑的测试：
 
 ```bat
 npm test
@@ -122,7 +122,7 @@ npm i link:<本仓库>\plugins\qq-agent-presets link:<本仓库>\plugins\qq-mode
 
 再按各插件 README 把 patch 行加入 profile。插件版本对应 DSH **0.1.7**。
 
-## 安全边界（照抄时别删）
+## 安全边界
 
 1. **AI 只能从语音库取文件**：`resolveVoicePathForV2` 里即使开 `allowAbsolutePath`，
    绝对路径仍必须落在库目录内，含 `..` 直接拒——防 prompt injection 把本机任意文件当语音外发。
