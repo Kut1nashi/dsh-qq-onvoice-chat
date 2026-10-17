@@ -22,13 +22,13 @@ copy packages\voice-out\lib\send-voice-lib.js <你的 qq-bridge-main>\src\send-v
 
 ```js
 import {
-  AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration,
+  AUDIO_EXTS, cleanupTemp, describeAudio, encodeAudioFile, formatBytes, formatDuration,
   inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume,
   resolveAudioProcessing, resolveAudioSource, safeJoinLibrary
 } from './send-voice-lib.js';
 ```
 
-> 这 12 个符号是原仓库实际 import 的全集，少一个都会在某个分支上报 `undefined`。
+> 以上13个符号用于本轮接线，新增 `encodeAudioFile` 供TTS发送内联快照。请同步更新两个库文件。
 
 ## 1. 配置节
 
@@ -78,10 +78,24 @@ import {
 **必须保留的降级语义**：模块缺失 / 没参考音频 / 限流 / 合成报错 / 文本超 `maxChars`，
 任一环节失败都 `return { sent: false, reason }` 退回文本发送，**绝不吞掉回复**。
 
-TTS 适配器为每次调用生成独立文件。片段中的 `finally` 使用公共导入的 `cleanupTemp`
-删除本次产物，发送失败也会清理。合成后会重新检查静默状态、启用开关和发送额度。
+TTS 适配器为每次调用生成独立文件。发送端在发送槽内用 `encodeAudioFile` 生成受
+`voice.maxBytes` 限制的内联音频快照，网关后续处理不再依赖原始/音量处理文件路径。
+片段中的 `finally` 删除本次产物，发送失败也会清理。
+库内输入解析、审计、限流和发送守卫照常执行；AI仍不能传URL或base64作为音频来源。
+Base64传输体积约增加三分之一，需在实际网关验证请求体限制及端到端耗时。
+用户使用的 `@snowluma/runtime v1.14.20` 源码已确认支持该音频来源，实际发行包联调仍待完成。
+
+**两个片段必须一起更新**：`voice-out.core.js` 中的 `voiceCfg()` 需透传 `tts: v.tts ?? {}`，
+否则模块路径和排队预算不能生效；`sendVoiceV2` 函数及紧接其后的
+`sendVoiceV2.supportsInlineAudio = true` 能力声明也须一起搬运。
+TTS片段遇到没有此声明的旧发送函数，会在合成前以 `sender-no-inline` 原因退回文本，
+避免旧函数忽略 `inline` 参数后仍清理音频路径。
+
+合成后会重新检查静默状态、启用开关和发送额度。
 `tts.startTimeoutMs` 默认 180000，`tts.queueTimeoutMs` 默认 15000，
 `tts.timeoutMs` 默认 120000；分别限制启动、排队和 HTTP 推理时间，配置示例已包含这些字段。
+15秒是默认响应预算。CPU推理可能使三请求中的后两条排队超时；先用本机分阶段计时测量，
+再比较30000/45000等候选预算，不能把默认值或协议层测试当成真实性能结论。
 
 接入点在统一出站函数 `sendMessagesV2(key, messages, delays, replyToMessageId, atUserId, allowVoice)`
 （原第 8200 行）。整段挂载代码（原第 8200-8211 行，逐字复制）：

@@ -12,7 +12,8 @@
       defaultVolume: Number(v.defaultVolume) > 0 ? Number(v.defaultVolume) : 1,
       loudness: v.loudness || 'normal',
       ffmpegPath: process.env.FFMPEG_PATH || v.ffmpegPath || null,
-      autoReadback: v.autoReadback !== false
+      autoReadback: v.autoReadback !== false,
+      tts: v.tts ?? {}
     };
   }
 
@@ -168,12 +169,13 @@
    * audio 可传音量设置 { volume, normalize, loudness }：SnowLuma 的 record 段没有增益字段，
    * 所以音量必须在本地用 ffmpeg 调好再发（临时文件发完即删）。
    */
-  async function sendVoiceV2(key, filePath, { guard = false, audit = true, audio = null } = {}) {
+  async function sendVoiceV2(key, filePath, { guard = false, audit = true, audio = null, inline = false } = {}) {
     const vc = voiceCfg();
     // 注意：这里**不检查** vc.enabled —— 那是「AI 能不能发语音」的开关，判定放在
     // AI 路由（/api/socialV2/send-voice）与 sendVoiceForV2 里。底层只管发，
     // 否则"默认不启用"会连操作者通道（CLI / 控制台面板 / 图形界面）一起封死。
     if (audit) assertOutboundAuditOk(key, `[语音:${path.basename(filePath)}]`);
+    const assertSendAllowed = guard ? captureSendGuard(key) : null;
     let info;
     try {
       info = await inspectAudio(filePath, { maxBytes: vc.maxBytes, maxSeconds: vc.maxSeconds });
@@ -196,15 +198,18 @@
     }
     const sendPath = processed.path;
 
-    const assertSendAllowed = guard ? captureSendGuard(key) : null;
     const [kind, id] = key.split(':');
-    const recordSegment = { type: 'record', data: { file: sendPath } };
     let resolveSend;
     let rejectSend;
     const sendPromise = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
     sendChain = sendChain.then(async () => {
       try {
         if (assertSendAllowed) assertSendAllowed();
+        // TTS 的一次性文件先生成内联快照，HTTP返回后网关不再依赖原始路径。
+        // 在发送槽内读取，避免整条等待队列同时持有放大后的base64字符串。
+        const file = inline ? await encodeAudioFile(sendPath, { maxBytes: vc.maxBytes }) : sendPath;
+        if (assertSendAllowed) assertSendAllowed();
+        const recordSegment = { type: 'record', data: { file } };
         // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（文本/图片共用同一 sendChain，
         // 所以这条语音发完之前后面的文本会自然排队，不会插队到语音前面）。
         const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
@@ -251,6 +256,9 @@
       cleanupTemp(sendPath, processed.converted);
     }
   }
+
+  // TTS片段在合成前检查此能力，避免旧发送函数忽略inline选项后仍清理路径。
+  sendVoiceV2.supportsInlineAudio = true;
 
   /** 把「我发了条语音」写进二代会话的 recentMessages，让 AI 自己知道刚发过什么。 */
   function recordVoiceSentV2(key, sent, label) {

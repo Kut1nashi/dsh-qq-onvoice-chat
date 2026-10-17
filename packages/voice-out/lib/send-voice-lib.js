@@ -26,5 +26,6 @@ export {
   resolveAudioProcessing,
   resolveFfmpeg,
   processAudioVolume,
+  encodeAudioFile,
   cleanupTemp
 } from './voice-core.js';

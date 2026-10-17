@@ -54,6 +54,10 @@
     }
     let out;
     try {
+      if (sendVoiceV2.supportsInlineAudio !== true) {
+        log('[tts] 发送函数尚未接入内联音频快照，退回文本；请同步更新voice-out.core.js片段');
+        return { sent: false, reason: 'sender-no-inline' };
+      }
       const mod = ttsCore();
       if (!mod || typeof mod.synthesize !== 'function' || typeof mod.available !== 'function' || !mod.available()) {
         return { sent: false, reason: 'tts-unavailable' };
@@ -73,7 +77,7 @@
       if (current.enabled === false || current.tts?.enabled === false) return { sent: false, reason: 'disabled' };
       voiceBudgetCheck(key, current);
       const resolved = resolveVoicePathForOperator(out.path);
-      await sendVoiceV2(key, resolved.path, { guard: true, audit: true });
+      await sendVoiceV2(key, resolved.path, { guard: true, audit: true, inline: true });
       voiceBudgetCommit(key);
       const why = answeringVoice ? '回应语音消息 → 100%' : `随机命中 ${Math.round(probability * 100)}%`;
       log(`[tts] 已发语音回复 (${key})：${why}，${path.basename(out.path)} ${out.bytes}B`);
@@ -83,7 +87,8 @@
       log(`[tts] 语音回复失败，退回文本 (${key})：${error?.message ?? error}`);
       return { sent: false, reason: 'error' };
     } finally {
-      // synthesize 产物归本次调用所有；发送完成或失败后都释放。
+      // 发送端已在内部读取受限快照；网关后续异步处理不再读取此路径。
+      // 合成后被守卫拦截或快照失败时同样释放本次产物。
       if (out?.path) cleanupTemp(out.path, true);
     }
   }

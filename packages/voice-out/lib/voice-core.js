@@ -462,6 +462,24 @@ export async function processAudioVolume(file, {
   };
 }
 
+/**
+ * 将已解析、已检查的本地音频读为 OneBot 内联快照。
+ * 只供可信发送链内部使用，调用方仍须执行语音库边界/审计/发送守卫。
+ * 限制实际读取字节数，避免读取过程中源文件增长绕过 inspectAudio 的大小检查。
+ */
+export async function encodeAudioFile(file, { maxBytes = DEFAULT_MAX_BYTES } = {}) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('音频快照上限必须是正整数');
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of fs.createReadStream(file)) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw new Error(`音频快照超过上限（${maxBytes}B）`);
+    chunks.push(chunk);
+  }
+  if (!bytes) throw new Error('音频快照为空');
+  return `base64://${Buffer.concat(chunks, bytes).toString('base64')}`;
+}
+
 /** 删除临时处理文件（失败不抛）。 */
 export function cleanupTemp(file, isTemp) {
   if (!isTemp) return;

@@ -96,6 +96,16 @@ export function summarize(rows) {
     meanRtf: rtf.length ? rounded(rtf.reduce((a, b) => a + b, 0) / rtf.length) : null };
 }
 
+export function summarizeTimings(rows) {
+  const summary = {};
+  for (const key of ['queueMs', 'serverMs', 'requestMs', 'saveMs', 'slotMs']) {
+    const values = rows.filter((r) => r.ok && Number.isFinite(r.timings?.[key])).map((r) => r.timings[key]).sort((a, b) => a - b);
+    summary[key] = { samples: values.length, p50: values.length ? rounded(values[Math.ceil(values.length * 0.5) - 1]) : null,
+      p95: values.length ? rounded(values[Math.ceil(values.length * 0.95) - 1]) : null };
+  }
+  return summary;
+}
+
 function parseArgs(args) {
   const opts = { runs: 3, concurrency: 3, queueTimeoutMs: 15000, label: 'default', outDir: 'tts-benchmark-results',
     engine: fileURLToPath(new URL('../packages/voice-out/engines/tts-core.cjs', import.meta.url)) };
@@ -134,6 +144,11 @@ export function markdown(report) {
     lines.push('', 'RTF = 总耗时 / 音频时长；小于 1 表示生成速度快于音频播放速度。', '', '## 分组统计', '',
       '| 分组 | 成功/请求 | P50 ms | P95 ms | 平均总耗时 RTF |', '|---|---|---|---|---|');
     for (const [key, s] of Object.entries(report.summary)) lines.push(`| ${key} | ${s.succeeded}/${s.requests} | ${s.p50Ms ?? '-'} | ${s.p95Ms ?? '-'} | ${s.meanRtf ?? '-'} |`);
+    lines.push('', '## 分阶段计时', '', '阶段均为毫秒。requestMs包含HTTP传输和响应读取；serverMs包含探活/启动，不能当成排队。旧适配器不提供timings时保留空值。', '',
+      '| 阶段/文本 | 排队 | 探活/启动 | HTTP请求 | 落盘 | 合成槽占用 |', '|---|---|---|---|---|---|');
+    for (const r of report.rows) lines.push(`| ${r.phase}/${r.caseId} | ${r.timings?.queueMs ?? '-'} | ${r.timings?.serverMs ?? '-'} | ${r.timings?.requestMs ?? '-'} | ${r.timings?.saveMs ?? '-'} | ${r.timings?.slotMs ?? '-'} |`);
+    lines.push('', '后续请求的排队预算需按本机合成槽占用P95及并发数评估。例如三请求串行时，最后一条可能等待前两条完成。',
+      '15秒是默认响应预算，并非CPU/GPU通用性能保证。30–45秒只作为待实测的候选，不能在没有数据时自动调高。超时失败仍计入失败率。', '');
     lines.push('', '## 试听清单', '', '客观波形指标不能判断可懂度、自然度、音色相似度或漏字；以下项目需要逐段试听。', '');
     for (const c of CASES) {
       lines.push(`- ${c.id}：${c.text}`, `  - 关注：${c.listenFor}`);
@@ -184,6 +199,7 @@ async function main() {
         produced = await engine.synthesize(c.text, options);
         row.wallMs = rounded(performance.now() - t0);
         row.adapterMs = produced.ms ?? null;
+        if (produced.timings) row.timings = produced.timings;
         // 旧/外部适配器可能忽略 outDir，复制进报告目录，避免清理其缓存或原始文件。
         const destination = path.join(runDir, `${phase}-${c.id}.wav`);
         fs.copyFileSync(produced.path, destination);
@@ -219,6 +235,10 @@ async function main() {
     engine?.stop?.();
     for (const c of CASES) report.summary[`warm/${c.id}`] = summarize(report.rows.filter((r) => r.phase.startsWith('warm-') && r.caseId === c.id));
     report.summary.parallel = summarize(report.rows.filter((r) => r.phase.startsWith('parallel-')));
+    report.timingSummary = {
+      warm: summarizeTimings(report.rows.filter((r) => r.phase.startsWith('warm-'))),
+      parallel: summarizeTimings(report.rows.filter((r) => r.phase.startsWith('parallel-')))
+    };
     fs.writeFileSync(path.join(runDir, 'report.json'), JSON.stringify(report, null, 2) + '\n');
     fs.writeFileSync(path.join(runDir, 'report.md'), markdown(report));
     console.log(`报告：${path.join(runDir, 'report.md')}`);

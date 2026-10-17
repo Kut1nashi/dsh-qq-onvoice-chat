@@ -14,7 +14,7 @@ tts.needsReference()     // → boolean：只差参考音频时为 true，用来
 tts.synthesize(text, opts)
 //   opts: { refAudio?, promptText?, promptLang?, textLang?, splitMethod?,
 //           timeoutMs?, startTimeoutMs?, queueTimeoutMs?, maxBytes?, outDir?, log? }
-//   → { path: string, bytes: number, ms: number }
+//   → { path: string, bytes: number, ms: number, timings: {...} }
 tts.ensureServer({ log, waitMs: 180000 })  // 拉起 FastAPI 服务（并发调用共用一次启动）
 tts.warmup({ log })        // 预热
 tts.probe(timeoutMs)       // 探测服务是否在跑
@@ -31,6 +31,9 @@ tts.stop()                 // 关掉本模块拉起的服务（不动别人起�
 **产物所有权**：每次成功合成都返回独立 WAV 文件，调用方在使用完后负责删除。
 自动回复桥接在发送结束或失败时都会清理文件；CLI 自测会保留产物供试听。
 `ms` 是本次 HTTP 合成和写盘耗时，不包含排队及服务启动时间。
+`timings` 使用单调时钟分别记录 `queueMs`、`serverMs`（探活/启动）、`requestMs`
+（HTTP与响应读取）、`saveMs`、`slotMs`（占用合成槽）和 `totalMs`。
+`requestMs` 包含网络开销，不能直接标成模型推理时间。
 
 ## 目录与路径约定
 
@@ -108,6 +111,8 @@ GPT-SoVITS 自带的 `api_v2.py` 是个 FastAPI，合成请求使用 `POST /tts`
 | `maxBytes` | 20971520 | 音频响应体上限，自动回复沿用 `voice.maxBytes` |
 
 这些限制均为正整数。各阶段独立计时，总等待时间可能为三个超时之和。
+15秒排队预算可能不适合慢CPU或多请求积压。请测量本机 `slotMs` 和 `queueMs` 的P95，
+再对30000/45000等候选预算与文本降级率做比较；本轮没有真实模型数据，因此没有自动调高默认值。
 响应按流读取并限制大小，检查 RIFF/WAVE 文件头后才保存；非音频、空内容、
 HTTP 错误均不产出成功结果。WAV 文件头检查不能代替实际解码或试听。
 服务探活保留无参数 `GET /tts`，接受成功响应或参数校验错误 400/422；

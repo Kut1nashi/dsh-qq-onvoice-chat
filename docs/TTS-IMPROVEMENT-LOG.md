@@ -77,7 +77,9 @@ CPU：AMD EPYC 9V74 80-Core Processor；Node.js v24.19.0。
 
 待 DS 在模型机器执行：真实首次/后续耗时、RTF、默认排队预算下的失败率、
 数字和中英混读、漏字/复读、参考音色一致性，以及桥接和 QQ 网关端到端表现。
-目前只验证 Linux/Node24；CI 配置覆盖 Windows/Linux 与 Node18/20/22，需以实际运行结果为准。
+初次交付已通过 Windows/Linux 与 Node18/20/22 的CI及secrets检查，
+见 [CI运行记录](https://github.com/Kut1nashi/dsh-qq-onvoice-chat/actions/runs/39056791362)。
+后续提交以PR对应的新一轮CI结果为准。
 
 ## 下一轮优化方向
 
@@ -88,3 +90,43 @@ CPU：AMD EPYC 9V74 80-Core Processor；Node.js v24.19.0。
 4. 分开测量完整 WAV 落盘与 QQ 网关转码/发送，不能将模型首包时间当成 QQ 可听时间。
 
 执行入口：[DS-TTS-TEST.md](DS-TTS-TEST.md)。详细指标：[TTS-BENCHMARK.md](TTS-BENCHMARK.md)。
+
+## DS截图反馈后的补强
+
+截图说明本机缺整合包runtime、权重、参考音频和ffmpeg；系统Python3.14虽有torch但缺
+fastapi/uvicorn，报告中的22项属于协议层替身测试。这是DS回报的环境边界，
+不能据此声称已完成真实推理、音质或QQ端到端验证。
+
+### 排队预算与配置
+
+- 发现参考 `voiceCfg()` 未返回 `.tts`，已补透传；模块路径和自定义排队预算现在可沿调用链生效。
+- `synthesize()`增加单调时钟分段计时，分开记录排队、探活/启动、HTTP、落盘和合成槽占用。
+  基准JSON汇总P50/P95，Markdown展示明细，旧引擎缺字段时保留未知。
+- 保留15秒默认响应预算。CPU上三请求可能积压，30–45秒仅作为本机对照候选，
+  需按实际P95、并发数和文本降级率决定，尚未获得真实模型数据。
+
+### 文件清理与发送
+
+- 参考发送函数只等待网关HTTP响应。为消除对部署版本异步读路径时机的依赖，
+  TTS现在在发送槽内生成有界内联音频快照，发送 `record.data.file = base64://...`。
+  原始WAV和音量产物删除后，后续网关处理仍持有完整字节；失败时也不再依赖这些路径。
+- AI输入解析仍只允许库内本地文件，审计、大小限制、额度和发送守卫保留；
+  内联编码仅在可信发送链内部进行。Base64使传输体积约增加三分之一，实际网关请求体限制和延迟仍需验证。
+- 新TTS片段合成前检查发送端内联能力；旧发送函数没有能力声明时安全降级文本，
+  避免其忽略新参数后继续以路径发送。
+- 用户已确认部署发行包为 `@snowluma/runtime v1.14.20`；已核对该标签的
+  [发行清单](https://github.com/SnowLuma/SnowLuma/blob/v1.14.20/packages/runtime/package.json)、
+  [语音加载实现](https://github.com/SnowLuma/SnowLuma/blob/v1.14.20/packages/protocol/src/highway/ptt-upload.ts#L100)
+  及 [base64源读取](https://github.com/SnowLuma/SnowLuma/blob/v1.14.20/packages/protocol/src/highway/utils.ts#L68)，确认该版本源码支持内联语音。
+  [OneBot返回链路](https://github.com/SnowLuma/SnowLuma/blob/v1.14.20/packages/onebot/src/actions/message.ts#L122)
+  和 [媒体构建](https://github.com/SnowLuma/SnowLuma/blob/v1.14.20/packages/core/src/bridge/apis/message.ts#L373)
+  使用await，正常成功响应前会执行媒体处理；截图提出的0字节问题尚未被实测证实。
+  内联快照同时减少HTTP超时/失败后清理路径的时序依赖。
+  本次完成的是版本源码核对，实际发行二进制、用户bridge.js及QQ端到端仍需验证。
+
+新增回归包含真实片段配置透传、分段计时、旧发送端降级、快照字节限制，以及
+20条回复在HTTP响应后、网关模拟消费前删除所有源文件/音量文件的测试。
+当前25项冒烟、32项TTS和7项测速工具测试通过；20条模拟并发消费不等于真实QQ压力测试。
+
+DS后续需先准备完整模型环境，测真实P95和15/30/45秒预算，再按说明做实际20条网关压力验证。
+真实推理、听感和网关端到端结论继续标记为待验证。

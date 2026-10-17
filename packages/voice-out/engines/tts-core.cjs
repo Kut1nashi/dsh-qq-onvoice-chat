@@ -22,6 +22,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { setTimeout: delay } = require('timers/promises');
+const { performance } = require('perf_hooks');
 
 const ROOT = __dirname;
 const REF_DIR = path.join(ROOT, 'ref');
@@ -199,7 +200,7 @@ async function warmup(options = {}) {
  * @param {{refAudio?: string, promptText?: string, promptLang?: string, textLang?: string,
  *   splitMethod?: string, timeoutMs?: number, startTimeoutMs?: number,
  *   queueTimeoutMs?: number, maxBytes?: number, outDir?: string, log?: Function}} [options]
- * @returns {Promise<{path: string, bytes: number, ms: number}>}
+ * @returns {Promise<{path: string, bytes: number, ms: number, timings: object}>}
  */
 async function synthesize(text, options = {}) {
   const clean = String(text ?? '').trim();
@@ -212,9 +213,12 @@ async function synthesize(text, options = {}) {
   const queueTimeoutMs = positiveInteger(options.queueTimeoutMs, timeoutMs, 'queueTimeoutMs');
   const startTimeoutMs = positiveInteger(options.startTimeoutMs, 180000, 'startTimeoutMs');
   const maxBytes = positiveInteger(options.maxBytes, 20 * 1024 * 1024, 'maxBytes');
+  const queuedAt = performance.now();
   const release = await acquireSynthesis(queueTimeoutMs);
+  const acquiredAt = performance.now();
   try {
     await ensureServer({ log: options.log, waitMs: startTimeoutMs });
+    const readyAt = performance.now();
 
     const payload = {
       text: clean,
@@ -242,6 +246,7 @@ async function synthesize(text, options = {}) {
       || buf.toString('ascii', 8, 12) !== 'WAVE') {
       throw new Error('TTS 返回无效 WAV 音频');
     }
+    const receivedAt = performance.now();
     const outDir = path.resolve(options.outDir || OUT_DIR);
     await fs.promises.mkdir(outDir, { recursive: true });
     const out = path.join(outDir, `tts-${randomUUID()}.wav`);
@@ -250,7 +255,16 @@ async function synthesize(text, options = {}) {
       if (error.code !== 'EEXIST') await fs.promises.unlink(out).catch(() => {});
       throw error;
     }
-    return { path: out, bytes: buf.length, ms: Date.now() - t0 };
+    const savedAt = performance.now();
+    const elapsed = (start, end) => Math.round((end - start) * 1000) / 1000;
+    return { path: out, bytes: buf.length, ms: Date.now() - t0, timings: {
+      queueMs: elapsed(queuedAt, acquiredAt),
+      serverMs: elapsed(acquiredAt, readyAt),
+      requestMs: elapsed(readyAt, receivedAt),
+      saveMs: elapsed(receivedAt, savedAt),
+      slotMs: elapsed(acquiredAt, savedAt),
+      totalMs: elapsed(queuedAt, savedAt)
+    } };
   } finally {
     release();
   }

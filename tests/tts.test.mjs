@@ -7,10 +7,12 @@ import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
+import { encodeAudioFile, cleanupTemp } from '../packages/voice-out/lib/voice-core.js';
 
 const require = createRequire(import.meta.url);
 const engineSource = fs.readFileSync(new URL('../packages/voice-out/engines/tts-core.cjs', import.meta.url), 'utf8');
 const bridgeSource = fs.readFileSync(new URL('../packages/voice-out/bridge/voice-out.tts.js', import.meta.url), 'utf8');
+const sendSource = fs.readFileSync(new URL('../packages/voice-out/bridge/voice-out.core.js', import.meta.url), 'utf8');
 
 function wav() {
   const out = Buffer.alloc(46);
@@ -304,6 +306,28 @@ test('concurrent synthesis is FIFO and never overlaps model requests', async (t)
   assert.equal(new Set(outputs.map((out) => out.path)).size, 3);
 });
 
+test('timings separate queue wait, server readiness, HTTP and file saving', async (t) => {
+  const entered = deferred(); const gate = deferred();
+  let posts = 0;
+  const { api } = engine(t, { fetch: async (_, opts) => {
+    if (opts.method !== 'POST') { await delay(3); return new Response(null, { status: 400 }); }
+    if (++posts === 1) { entered.resolve(); await gate.promise; }
+    await delay(3);
+    return new Response(wav());
+  } });
+  const first = api.synthesize('first');
+  await entered.promise;
+  const second = api.synthesize('second');
+  await delay(25); gate.resolve();
+  const results = await Promise.all([first, second]);
+  assert.ok(results[1].timings.queueMs >= 20);
+  for (const { timings } of results) {
+    for (const value of Object.values(timings)) assert.ok(Number.isFinite(value) && value >= 0);
+    assert.ok(Math.abs(timings.queueMs + timings.slotMs - timings.totalMs) < 0.01);
+    assert.ok(Math.abs(timings.serverMs + timings.requestMs + timings.saveMs - timings.slotMs) < 0.01);
+  }
+});
+
 test('queued requests expire without reaching the model', async (t) => {
   const gate = deferred(); const entered = deferred(); const requests = [];
   const { api } = engine(t, { fetch: async (_, opts) => {
@@ -364,6 +388,7 @@ function bridge(overrides = {}) {
     cleanupTemp: (p, temporary) => cleaned.push({ p, temporary }),
     log: () => {}, appendActivity: () => {}, ...overrides
   };
+  context.sendVoiceV2.supportsInlineAudio = true;
   vm.createContext(context);
   // 参考片段原本嵌在 ESM bridge.js 中；vm Script 用常量代替 import.meta.url。
   vm.runInContext(bridgeSource.replace('import.meta.url', JSON.stringify(import.meta.url)), context,
@@ -437,4 +462,87 @@ test('disabling TTS during synthesis prevents sending and cleans the generated f
   assert.equal((await b.reply('private:123', 'test')).reason, 'disabled');
   assert.equal(b.sent.length, 0);
   assert.equal(b.cleaned.length, 1);
+});
+
+test('voiceCfg preserves the configured TTS module and queue timeout', () => {
+  const tts = { module: 'configured-core.cjs', queueTimeoutMs: 45000 };
+  const ctx = { cfg: { socialV2: { voice: { tts } } }, ROOT: os.tmpdir(), path, process: { env: {} } };
+  vm.createContext(ctx); vm.runInContext(sendSource, ctx);
+  assert.equal(ctx.voiceCfg().tts, tts);
+  assert.equal(ctx.voiceCfg().tts.queueTimeoutMs, 45000);
+});
+
+test('TTS fragment falls back before synthesis when a legacy sender ignores inline audio', async () => {
+  let synthesized = false;
+  const ctx = {
+    path, voiceCfg: () => ({ tts: { replyProbability: 1 } }),
+    shouldBlockSilentReply: () => false, getSocialV2State: () => ({ recentMessages: [] }),
+    voiceBudgetCheck: () => {}, log: () => {}, sendVoiceV2: async () => {},
+    ttsCoreLoaded: true, ttsCoreModule: { available: () => true, synthesize: async () => { synthesized = true; } }
+  };
+  vm.createContext(ctx); vm.runInContext(bridgeSource.replace('import.meta.url', JSON.stringify(import.meta.url)), ctx);
+  assert.equal((await ctx.maybeReplyAsVoiceV2('private:123', 'test')).reason, 'sender-no-inline');
+  assert.equal(synthesized, false);
+});
+
+test('inline snapshot remains readable after original file cleanup and respects byte limits', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-inline-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'source.wav');
+  fs.writeFileSync(file, wav());
+  await assert.rejects(encodeAudioFile(file, { maxBytes: wav().length - 1 }), /超过上限/);
+  await assert.rejects(encodeAudioFile(file, { maxBytes: Infinity }), /正整数/);
+  const snapshot = await encodeAudioFile(file, { maxBytes: wav().length });
+  cleanupTemp(file, true);
+  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(Buffer.from(snapshot.slice('base64://'.length), 'base64'), wav());
+  fs.writeFileSync(file, '');
+  await assert.rejects(encodeAudioFile(file), /快照为空/);
+});
+
+test('20 TTS replies keep audio bytes available to a gateway reading after HTTP acknowledgement', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-deferred-gateway-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const payloads = []; const created = [];
+  let nextId = 0;
+  const cfg = { socialV2: { voice: { enabled: true, maxPerMinute: 0, maxPerHour: 0,
+    tts: { enabled: true, replyProbability: 1, queueTimeoutMs: 45000 } } }, snowluma: {} };
+  const ctx = {
+    fs, path, ROOT: dir, cfg, process: { env: {} }, sendChain: Promise.resolve(), voiceSendTimes: new Map(),
+    encodeAudioFile, cleanupTemp, AbortSignal,
+    log: () => {}, appendActivity: () => {}, shouldBlockSilentReply: () => false,
+    getSocialV2State: () => ({ recentMessages: [] }),
+    assertOutboundAuditOk: () => {}, captureSendGuard: () => () => {},
+    inspectAudio: async (file) => ({ ok: true, size: fs.statSync(file).size, duration: 1, warnings: [] }),
+    describeAudio: () => 'test wave',
+    processAudioVolume: async (file) => {
+      const converted = file + '.converted.wav'; fs.copyFileSync(file, converted); created.push(converted);
+      return { path: converted, converted: true, volume: 1, loudness: null, mode: 'original' };
+    },
+    fetch: async (_, options) => {
+      const message = JSON.parse(options.body).message;
+      payloads.push(message[0].data.file);
+      // 返回时不读取音频，在全部文件被清理后才模拟网关消费。
+      return new Response(JSON.stringify({ status: 'ok', retcode: 0, data: { message_id: payloads.length } }));
+    },
+    ttsCoreLoaded: true,
+    ttsCoreModule: { available: () => true, synthesize: async (_, options) => {
+      assert.equal(options.queueTimeoutMs, 45000);
+      const file = path.join(dir, `tts-${++nextId}.wav`); fs.writeFileSync(file, wav()); created.push(file);
+      return { path: file, bytes: wav().length };
+    } }
+  };
+  vm.createContext(ctx); vm.runInContext(sendSource, ctx);
+  // 测试已生成的可信本地文件；不使用操作者路径解析里的其它外部函数。
+  ctx.resolveVoicePathForOperator = (file) => ({ path: file });
+  vm.runInContext(bridgeSource.replace('import.meta.url', JSON.stringify(import.meta.url)), ctx);
+  const replies = await Promise.all(Array.from({ length: 20 }, () => ctx.maybeReplyAsVoiceV2('private:123', '测试')));
+  assert.equal(replies.every((r) => r.sent === true), true);
+  assert.equal(payloads.length, 20);
+  assert.equal(created.every((file) => !fs.existsSync(file)), true);
+  await delay(10);
+  for (const payload of payloads) {
+    assert.ok(payload.startsWith('base64://'));
+    assert.deepEqual(Buffer.from(payload.slice(9), 'base64'), wav());
+  }
 });

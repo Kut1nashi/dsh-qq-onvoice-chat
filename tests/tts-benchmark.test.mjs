@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { analyzeWav, summarize, markdown } from '../scripts/benchmark-tts.mjs';
+import { analyzeWav, summarize, summarizeTimings, markdown } from '../scripts/benchmark-tts.mjs';
 
 function signal({ silence = false, clipped = false } = {}) {
   const rate = 32000; const frames = rate * 1.3;
@@ -56,6 +56,17 @@ test('summary excludes failures from latency distribution while retaining failur
     { ok: true, wallMs: 100, rtf: 0.1 }, { ok: true, wallMs: 200, rtf: 0.2 },
     { ok: false, wallMs: 5000 }
   ]), { requests: 3, succeeded: 2, failed: 1, p50Ms: 100, p95Ms: 200, meanRtf: 0.15 });
+});
+
+test('phase timing summaries retain missing data and exclude failed requests', () => {
+  const result = summarizeTimings([
+    { ok: true, timings: { queueMs: 100, serverMs: 5, slotMs: 50 } },
+    { ok: true, timings: { queueMs: 200, serverMs: 10, slotMs: 60 } },
+    { ok: false, timings: { queueMs: 9999 } }, { ok: true }
+  ]);
+  assert.deepEqual(result.queueMs, { samples: 2, p50: 100, p95: 200 });
+  assert.deepEqual(result.serverMs, { samples: 2, p50: 5, p95: 10 });
+  assert.deepEqual(result.requestMs, { samples: 0, p50: null, p95: null });
 });
 
 test('benchmark command produces playable files and a report using a fixture adapter', (t) => {

@@ -35,12 +35,20 @@ node scripts/benchmark-tts.mjs --engine "<适配器完整路径>" --ref-audio "<
 
 - `wallMs`：从调用 `synthesize()` 到完整 WAV 落盘，包含排队、启动、探活和文件写入。
 - `adapterMs`：适配器返回的 `ms`，本项目实现只包含 HTTP 合成与落盘，不含排队或启动。
+- `timings`：新版额外返回 `queueMs`、`serverMs`、`requestMs`、`saveMs`、`slotMs` 和 `totalMs`。
+  JSON保存逐条值及P50/P95，Markdown显示分阶段明细；旧版没有这些字段时保留空值。
 - `RTF`：`wallMs / 音频时长毫秒`。小于 1 表示生成速度快于音频播放速度。
 - P50/P95：只统计成功样本，失败单独计数。默认样本数少，P95 只能用于观察。
 - 并发阶段：分别观察每条请求耗时与失败；串行队列不会把三条请求变成一次并行推理。
 
 排队超时默认 15000ms，与自动回复配置一致。想观察更长队列的完成顺序时可用
 `--queue-timeout-ms 120000`，但该结果不能代表默认自动回复的成功率。
+
+慢CPU下，三条串行请求的最后一条可能等待前两条完成。分别使用
+`--queue-timeout-ms 15000`、`30000`、`45000`，比较本机 `queueMs` / `slotMs` 的P95与失败率，
+再决定实际桥接的 `socialV2.voice.tts.queueTimeoutMs`。
+这些数值是待验证的响应预算选项，没有实测时不自动调整默认值。
+`serverMs`含启动或探活，`requestMs`含HTTP传输；不要把 `wallMs - adapterMs` 全部标为排队。
 
 `first` 只是该次脚本的首次调用。报告会标记服务预先是否已响应，**不能仅凭首次调用就称为冷启动**。
 要测真正的冷启动，请在方便时手动退出你自己启动的 GPT-SoVITS 服务，再运行脚本。
