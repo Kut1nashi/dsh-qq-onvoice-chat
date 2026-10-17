@@ -136,8 +136,8 @@ npm i link:<本仓库>\plugins\qq-agent-presets link:<本仓库>\plugins\qq-mode
 ## 兼容性与限制
 
 - Node.js **≥ 18**（用到 `fetch`、`AbortSignal.timeout`）。
-- 默认按 **Windows** 路径（`runtime/python.exe`、`@ffmpeg-installer/win32-x64`）；Linux/macOS 需改
-  `stt-core.cjs` 的 `FFMPEG` 常量与 `tts-core.cjs` 的 `PY` 后缀。
+- 默认按 **Windows** 路径（`runtime/python.exe`、`@ffmpeg-installer/win32-x64`）；Linux/macOS 的 TTS
+  可用 `VOICE_TTS_PYTHON` / `VOICE_TTS_FFMPEG` 指定完整路径，STT 仍需调整 `stt-core.cjs` 的 `FFMPEG`。
 - 语音输出依赖自建 GPT-SoVITS 服务（默认 `127.0.0.1:9880`）。
 - 参考音频决定克隆音色，**使用他人声音的授权问题请自行确认**。
 - 本包**未做跨平台端到端实测**，验证范围见 [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md)。
@@ -147,6 +147,9 @@ npm i link:<本仓库>\plugins\qq-agent-presets link:<本仓库>\plugins\qq-mode
 | 文档 | 内容 |
 |---|---|
 | [docs/ENV-SETUP.md](docs/ENV-SETUP.md) | 两个引擎的安装、下载地址、目录约定 |
+| [docs/TTS-BENCHMARK.md](docs/TTS-BENCHMARK.md) | 本机合成速度、排队及试听效果测试 |
+| [docs/TTS-IMPROVEMENT-LOG.md](docs/TTS-IMPROVEMENT-LOG.md) | 本次TTS改进、验证证据、限制及后续方向 |
+| [docs/DS-TTS-TEST.md](docs/DS-TTS-TEST.md) | 可直接交给DS执行的本机测试任务与回传模板 |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | 逐函数接线清单、行号锚点、开关与路由 |
 | [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md) | 这套东西是怎么长出来的：能力、决策、踩过的坑 |
 | [SECURITY.md](SECURITY.md) | 威胁模型与私密报告方式 |

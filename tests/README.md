@@ -3,12 +3,21 @@
 ## 离线冒烟（CI 跑这个）
 
 ```bash
-npm test          # node tests/smoke.mjs
+npm test          # 语音内核冒烟 + TTS 回归测试
 npm run check     # node scripts/check-syntax.mjs
 ```
 
 `smoke.mjs` 只依赖 Node 内置模块，验证语音内核的纯函数：来源解析、库内边界、
 体积/时长格式化、目标 key、音量档位、文件名净化。
+
+`tts.test.mjs` 使用 Node 内置测试框架，在临时目录中加载真实 TTS 适配器，模拟
+HTTP 响应和子进程事件。覆盖服务复用、并发启动、进程异常/超时/停止、JSON POST、
+WAV 与大小校验、响应体读取超时、有界串行队列，以及桥接文本降级和临时文件清理。
+不需要 GPT-SoVITS、网络、模型或 QQ 网关；不验证真实模型音质。
+
+`tts-benchmark.test.mjs` 用已知波形验证测量误差、静音/削波提示，以及完整命令的报告与音频输出。
+它使用固定适配器做功能验证，不能作为 GPT-SoVITS 速度或效果测试。
+真实合成基准请见 [TTS-BENCHMARK.md](../docs/TTS-BENCHMARK.md)。
 
 ## 桥接内集成测试
 

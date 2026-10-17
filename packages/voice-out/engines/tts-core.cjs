@@ -18,21 +18,26 @@
  * 用 cutReference() 可以从番剧文件里切出参考片段。
  */
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { randomUUID } = require('crypto');
+const { setTimeout: delay } = require('timers/promises');
 
 const ROOT = __dirname;
 const REF_DIR = path.join(ROOT, 'ref');
 const OUT_DIR = path.join(ROOT, 'out');
 
-// GPT-SoVITS 整合包位置：环境变量优先，否则用与本文件同级的 ./GPT-SoVITS。
+// GPT-SoVITS 整合包位置：环境变量 → gsv-dir.txt → 同级 ./GPT-SoVITS。
 // 代码里**不含任何本机绝对路径**，换机器不用改源码。
-const GSV_DIR = String(process.env.VOICE_TTS_GSV_DIR || '').trim()
-  || path.join(ROOT, 'GPT-SoVITS');
-const PY = path.join(GSV_DIR, 'runtime', 'python.exe');
+function configuredDirectory() {
+  try { return fs.readFileSync(path.join(ROOT, 'gsv-dir.txt'), 'utf8').split(/\r?\n/u)[0].trim(); }
+  catch { return ''; }
+}
+const GSV_DIR = path.resolve(String(process.env.VOICE_TTS_GSV_DIR || '').trim() || configuredDirectory()
+  || path.join(ROOT, 'GPT-SoVITS'));
+const PY = process.env.VOICE_TTS_PYTHON || path.join(GSV_DIR, 'runtime', 'python.exe');
 const API = path.join(GSV_DIR, 'api_v2.py');
-const FFMPEG = path.join(GSV_DIR, 'ffmpeg.exe');
+const FFMPEG = process.env.VOICE_TTS_FFMPEG || path.join(GSV_DIR, 'ffmpeg.exe');
 const CFG = path.join(GSV_DIR, 'GPT_SoVITS', 'configs', 'tts_infer.yaml');
 
 const DEFAULT_REF = path.join(REF_DIR, 'sally_ref.wav');
@@ -44,6 +49,19 @@ const BASE = `http://${HOST}:${PORT}`;
 
 let serverProc = null;
 let serverStarting = null;
+let startupController = null;
+const synthesisQueue = [];
+let synthesizing = false;
+const MAX_PENDING = 8;
+
+function positiveInteger(value, fallback, name) {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n <= 0 || n > 2147483647) {
+    throw new Error(`${name} 必须是 1~2147483647 的整数`);
+  }
+  return n;
+}
 
 function exists(f) {
   try { return fs.existsSync(f); } catch { return false; }
@@ -67,13 +85,22 @@ function referenceText() {
   }
 }
 
-/** 服务探活：只要 HTTP 端口有响应就算活着（少参数时它回 400，也算活着）。 */
-async function probe(timeoutMs = 2500) {
+/** 无参数 /tts 会回 400/422；5xx、404 等不代表服务就绪。 */
+async function probe(timeoutMs = 2500, signal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, timeoutMs);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
   try {
-    await fetch(`${BASE}/tts`, { signal: AbortSignal.timeout(timeoutMs) });
-    return true;
+    const res = await fetch(`${BASE}/tts`, { signal: controller.signal });
+    await res.body?.cancel();
+    return res.ok || res.status === 400 || res.status === 422;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -84,45 +111,74 @@ async function probe(timeoutMs = 2500) {
  * @returns {Promise<{ok: boolean, started: boolean, ms?: number}>}
  */
 async function ensureServer(options = {}) {
-  const log = typeof options.log === 'function' ? options.log : () => {};
-  const waitMs = Number(options.waitMs) || 180000;
-  if (await probe()) return { ok: true, started: false };
   if (serverStarting) return serverStarting;
-
+  const log = typeof options.log === 'function' ? options.log : () => {};
+  const waitMs = positiveInteger(options.waitMs, 180000, 'waitMs');
+  const controller = new AbortController();
+  startupController = controller;
+  let child = null;
   serverStarting = (async () => {
+    const t0 = Date.now();
+    const remaining = () => Math.max(1, waitMs - (Date.now() - t0));
+    const checkStopped = () => {
+      if (controller.signal.aborted) throw new Error('TTS 服务启动已取消');
+    };
+    const ready = await probe(Math.min(2500, remaining()), controller.signal);
+    checkStopped();
+    if (ready) return { ok: true, started: false };
+    if (serverProc && serverProc.exitCode === null && serverProc.signalCode == null) {
+      throw new Error('TTS 服务进程仍在运行但探活失败，请检查服务日志');
+    }
+    if (Date.now() - t0 >= waitMs) throw new Error(`TTS 服务启动超时（${waitMs}ms）`);
     for (const f of [PY, API, CFG]) {
       if (!exists(f)) throw new Error(`缺少 GPT-SoVITS 文件：${f}`);
     }
     log(`[tts] 启动 GPT-SoVITS 服务 ${HOST}:${PORT} …`);
-    const child = spawn(PY, [API, '-a', HOST, '-p', String(PORT), '-c', CFG], {
+    child = spawn(PY, [API, '-a', HOST, '-p', String(PORT), '-c', CFG], {
       cwd: GSV_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     });
     serverProc = child;
+    let spawnError = null;
+    let exited = false;
     let tail = '';
     const eat = (d) => { tail = (tail + d.toString()).slice(-4000); };
     child.stdout.on('data', eat);
     child.stderr.on('data', eat);
+    child.on('error', (error) => { spawnError = error; });
     child.on('exit', (code) => {
+      exited = true;
       log(`[tts] 服务进程退出，code=${code}`);
       if (serverProc === child) serverProc = null;
     });
 
-    const t0 = Date.now();
     while (Date.now() - t0 < waitMs) {
-      if (await probe()) {
+      checkStopped();
+      const ready = await probe(Math.min(2500, remaining()), controller.signal);
+      checkStopped();
+      if (spawnError) throw new Error(`TTS 服务启动失败：${spawnError.message}`);
+      if (exited || child.exitCode !== null || child.signalCode != null) {
+        throw new Error(`TTS 服务启动失败（code=${child.exitCode}）：${tail.slice(-400)}`);
+      }
+      if (ready) {
         const ms = Date.now() - t0;
         log(`[tts] 服务就绪，用时 ${ms}ms`);
         return { ok: true, started: true, ms };
       }
-      if (child.exitCode !== null) {
-        throw new Error(`TTS 服务启动失败（code=${child.exitCode}）：${tail.slice(-400)}`);
-      }
-      await new Promise((r) => setTimeout(r, 1500));
+      await delay(Math.min(1500, remaining()), undefined, { signal: controller.signal });
     }
     throw new Error(`TTS 服务启动超时（${waitMs}ms）：${tail.slice(-400)}`);
-  })().finally(() => { serverStarting = null; });
+  })().catch((error) => {
+    if (child) {
+      try { child.kill(); } catch {}
+      if (serverProc === child) serverProc = null;
+    }
+    throw error;
+  }).finally(() => {
+    if (startupController === controller) startupController = null;
+    serverStarting = null;
+  });
 
   return serverStarting;
 }
@@ -141,7 +197,8 @@ async function warmup(options = {}) {
  * 文本 → wav 文件。
  * @param {string} text 要合成的文本（简体中文走 textLang 'zh'）。
  * @param {{refAudio?: string, promptText?: string, promptLang?: string, textLang?: string,
- *   splitMethod?: string, timeoutMs?: number, outDir?: string, log?: Function}} [options]
+ *   splitMethod?: string, timeoutMs?: number, startTimeoutMs?: number,
+ *   queueTimeoutMs?: number, maxBytes?: number, outDir?: string, log?: Function}} [options]
  * @returns {Promise<{path: string, bytes: number, ms: number}>}
  */
 async function synthesize(text, options = {}) {
@@ -151,32 +208,103 @@ async function synthesize(text, options = {}) {
   if (!exists(refAudio)) {
     throw new Error(`参考音频不存在：${refAudio}（把干净人声放到 ref/sally_ref.wav）`);
   }
-  await ensureServer({ log: options.log });
+  const timeoutMs = positiveInteger(options.timeoutMs, 120000, 'timeoutMs');
+  const queueTimeoutMs = positiveInteger(options.queueTimeoutMs, timeoutMs, 'queueTimeoutMs');
+  const startTimeoutMs = positiveInteger(options.startTimeoutMs, 180000, 'startTimeoutMs');
+  const maxBytes = positiveInteger(options.maxBytes, 20 * 1024 * 1024, 'maxBytes');
+  const release = await acquireSynthesis(queueTimeoutMs);
+  try {
+    await ensureServer({ log: options.log, waitMs: startTimeoutMs });
 
-  const url = new URL(`${BASE}/tts`);
-  url.searchParams.set('text', clean);
-  url.searchParams.set('text_lang', options.textLang || 'zh');
-  url.searchParams.set('ref_audio_path', refAudio);
-  url.searchParams.set('prompt_text', options.promptText ?? referenceText());
-  url.searchParams.set('prompt_lang', options.promptLang || 'zh');
-  url.searchParams.set('text_split_method', options.splitMethod || 'cut5');
-  url.searchParams.set('batch_size', '1');
-  url.searchParams.set('media_type', 'wav');
-  url.searchParams.set('streaming_mode', 'false');
+    const payload = {
+      text: clean,
+      text_lang: options.textLang || 'zh',
+      ref_audio_path: path.resolve(refAudio),
+      prompt_text: options.promptText ?? referenceText(),
+      prompt_lang: options.promptLang || 'zh',
+      text_split_method: options.splitMethod || 'cut5',
+      batch_size: 1,
+      media_type: 'wav',
+      streaming_mode: false
+    };
 
-  const t0 = Date.now();
-  const res = await fetch(url, { signal: AbortSignal.timeout(Number(options.timeoutMs) || 120000) });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`TTS HTTP ${res.status}：${body.slice(0, 300)}`);
+    const t0 = Date.now();
+    const res = await fetch(`${BASE}/tts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!res.ok) {
+      const body = await readBody(res, 4096, true);
+      throw new Error(`TTS HTTP ${res.status}：${body.toString('utf8').slice(0, 300)}`);
+    }
+    const buf = await readBody(res, maxBytes);
+    if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF'
+      || buf.toString('ascii', 8, 12) !== 'WAVE') {
+      throw new Error('TTS 返回无效 WAV 音频');
+    }
+    const outDir = path.resolve(options.outDir || OUT_DIR);
+    await fs.promises.mkdir(outDir, { recursive: true });
+    const out = path.join(outDir, `tts-${randomUUID()}.wav`);
+    try { await fs.promises.writeFile(out, buf, { flag: 'wx' }); }
+    catch (error) {
+      if (error.code !== 'EEXIST') await fs.promises.unlink(out).catch(() => {});
+      throw error;
+    }
+    return { path: out, bytes: buf.length, ms: Date.now() - t0 };
+  } finally {
+    release();
   }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (!buf.length) throw new Error('TTS 返回空音频');
-  const outDir = options.outDir || OUT_DIR;
-  fs.mkdirSync(outDir, { recursive: true });
-  const out = path.join(outDir, `tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`);
-  fs.writeFileSync(out, buf);
-  return { path: out, bytes: buf.length, ms: Date.now() - t0 };
+}
+
+// GPT-SoVITS 共用模型与参考音频状态：同一适配器内串行推理，排队过久退回文本。
+function acquireSynthesis(timeoutMs) {
+  if (!synthesizing) {
+    synthesizing = true;
+    return Promise.resolve(releaseSynthesis);
+  }
+  if (synthesisQueue.length >= MAX_PENDING) return Promise.reject(new Error('TTS 合成队列已满'));
+  return new Promise((resolve, reject) => {
+    const entry = { resolve, reject, timer: null };
+    entry.timer = setTimeout(() => {
+      synthesisQueue.splice(synthesisQueue.indexOf(entry), 1);
+      reject(new Error(`TTS 合成排队超时（${timeoutMs}ms）`));
+    }, timeoutMs);
+    synthesisQueue.push(entry);
+  });
+}
+
+function releaseSynthesis() {
+  const next = synthesisQueue.shift();
+  if (next) {
+    clearTimeout(next.timer);
+    next.resolve(releaseSynthesis);
+  } else synthesizing = false;
+}
+
+async function readBody(res, maxBytes, truncate = false) {
+  const reader = res.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  let bytes = 0;
+  const chunks = [];
+  try {
+    const declared = Number(res.headers.get('content-length'));
+    if (!truncate && declared > maxBytes) throw new Error(`TTS 音频超过上限（${maxBytes}B）`);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (bytes + value.byteLength > maxBytes) {
+        if (!truncate) throw new Error(`TTS 音频超过上限（${maxBytes}B）`);
+        chunks.push(Buffer.from(value.subarray(0, maxBytes - bytes)));
+        break;
+      }
+      chunks.push(Buffer.from(value));
+      bytes += value.byteLength;
+    }
+    return Buffer.concat(chunks);
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,8 +322,11 @@ function runFfmpeg(args, timeoutMs = 120000) {
     }
     let stderr = '';
     let timer = null;
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', (e) => { resolve({ code: -1, stderr: String(e?.message ?? e) }); });
+    child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4000); });
+    child.on('error', (e) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: -1, stderr: String(e?.message ?? e) });
+    });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
       resolve({ code, stderr });
@@ -225,8 +356,9 @@ async function cutReference(srcFile, startSec, durSec, options = {}) {
     '-ss', String(startSec), '-t', String(durSec), '-i', srcFile,
     '-vn', '-ac', '1', '-ar', String(rate), '-f', 'wav', out
   ]);
-  if (!exists(out)) throw new Error(`切片失败：${r.stderr.trim().slice(0, 300)}`);
+  if (r.code !== 0 || !exists(out)) throw new Error(`切片失败：${r.stderr.trim().slice(0, 300)}`);
   const stat = fs.statSync(out);
+  if (!stat.size) throw new Error('切片失败：输出音频为空');
   return { path: out, bytes: stat.size, seconds: Number(durSec) };
 }
 
@@ -246,6 +378,11 @@ async function separateVocals(srcFile, options = {}) {
 
 /** 关掉本模块拉起的服务进程（不动别人起的）。 */
 function stop() {
+  startupController?.abort();
+  for (const entry of synthesisQueue.splice(0)) {
+    clearTimeout(entry.timer);
+    entry.reject(new Error('TTS 服务已停止'));
+  }
   if (serverProc) {
     try { serverProc.kill(); } catch {}
     serverProc = null;
@@ -281,7 +418,9 @@ if (require.main === module) {
       console.log('OK', JSON.stringify(out));
     } catch (error) {
       console.error('FAIL', error?.message ?? error);
-      process.exit(1);
+      process.exitCode = 1;
+    } finally {
+      stop();
     }
   })();
 }

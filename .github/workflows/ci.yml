@@ -24,8 +24,8 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Syntax check
         run: node scripts/check-syntax.mjs
-      - name: Smoke test
-        run: node tests/smoke.mjs
+      - name: Offline tests
+        run: npm test
 
   secrets:
     runs-on: ubuntu-latest

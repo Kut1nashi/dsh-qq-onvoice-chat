@@ -23,7 +23,9 @@
         "textLang": "zh",
         "promptLang": "zh",
         "maxChars": 200,
-        "timeoutMs": 120000
+        "timeoutMs": 120000,
+        "startTimeoutMs": 180000,
+        "queueTimeoutMs": 15000
       }
     }
   }

@@ -21,7 +21,8 @@
   },
   "scripts": {
     "check": "node scripts/check-syntax.mjs",
-    "test": "node tests/smoke.mjs",
+    "test": "node tests/smoke.mjs && node --test tests/tts.test.mjs tests/tts-benchmark.test.mjs",
+    "bench:tts": "node scripts/benchmark-tts.mjs",
     "verify": "npm run check && npm test"
   },
   "repository": {

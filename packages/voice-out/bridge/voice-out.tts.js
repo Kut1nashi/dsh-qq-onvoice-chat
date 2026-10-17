@@ -43,10 +43,6 @@
     const clean = String(text ?? '').trim();
     if (!clean) return { sent: false, reason: 'empty' };
     if (clean.length > (Number(tts.maxChars) || 200)) return { sent: false, reason: 'too-long' };
-    const mod = ttsCore();
-    if (!mod || typeof mod.synthesize !== 'function' || !mod.available()) {
-      return { sent: false, reason: 'tts-unavailable' };
-    }
     const answeringVoice = lastIncomingWasVoice(key);
     const probability = Number(tts.replyProbability ?? 0.05);
     if (!answeringVoice && !(Math.random() < probability)) return { sent: false, reason: 'probability' };
@@ -56,13 +52,26 @@
     } catch {
       return { sent: false, reason: 'rate-limit' };
     }
+    let out;
     try {
-      const out = await mod.synthesize(clean, {
+      const mod = ttsCore();
+      if (!mod || typeof mod.synthesize !== 'function' || typeof mod.available !== 'function' || !mod.available()) {
+        return { sent: false, reason: 'tts-unavailable' };
+      }
+      out = await mod.synthesize(clean, {
         textLang: tts.textLang || 'zh',
         promptLang: tts.promptLang || 'zh',
         timeoutMs: Number(tts.timeoutMs) || 120000,
+        startTimeoutMs: Number(tts.startTimeoutMs) || 180000,
+        queueTimeoutMs: Number(tts.queueTimeoutMs) || 15000,
+        maxBytes: vc.maxBytes,
         log: (m) => log(String(m))
       });
+      // 合成期间可能已切换静默模式，或其它消息用掉了额度。
+      if (shouldBlockSilentReply(key)) return { sent: false, reason: 'silent' };
+      const current = voiceCfg();
+      if (current.enabled === false || current.tts?.enabled === false) return { sent: false, reason: 'disabled' };
+      voiceBudgetCheck(key, current);
       const resolved = resolveVoicePathForOperator(out.path);
       await sendVoiceV2(key, resolved.path, { guard: true, audit: true });
       voiceBudgetCommit(key);
@@ -73,5 +82,8 @@
     } catch (error) {
       log(`[tts] 语音回复失败，退回文本 (${key})：${error?.message ?? error}`);
       return { sent: false, reason: 'error' };
+    } finally {
+      // synthesize 产物归本次调用所有；发送完成或失败后都释放。
+      if (out?.path) cleanupTemp(out.path, true);
     }
   }

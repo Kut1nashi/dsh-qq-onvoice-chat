@@ -78,6 +78,11 @@ import {
 **必须保留的降级语义**：模块缺失 / 没参考音频 / 限流 / 合成报错 / 文本超 `maxChars`，
 任一环节失败都 `return { sent: false, reason }` 退回文本发送，**绝不吞掉回复**。
 
+TTS 适配器为每次调用生成独立文件。片段中的 `finally` 使用公共导入的 `cleanupTemp`
+删除本次产物，发送失败也会清理。合成后会重新检查静默状态、启用开关和发送额度。
+`tts.startTimeoutMs` 默认 180000，`tts.queueTimeoutMs` 默认 15000，
+`tts.timeoutMs` 默认 120000；分别限制启动、排队和 HTTP 推理时间，配置示例已包含这些字段。
+
 接入点在统一出站函数 `sendMessagesV2(key, messages, delays, replyToMessageId, atUserId, allowVoice)`
 （原第 8200 行）。整段挂载代码（原第 8200-8211 行，逐字复制）：
 
