@@ -1,0 +1,53 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# engines, models, binaries (never publish)
+packages/*/engines/model/
+packages/*/engines/out/
+packages/*/engines/ref/
+packages/*/engines/GPT-SoVITS/
+packages/*/engines/gsv-dir.txt
+packages/*/engines/tmp/
+*.onnx
+*.pth
+*.ckpt
+*.safetensors
+
+# voice library content (README is kept)
+audio/
+!examples/audio/
+!examples/audio/README.md
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.aac
+*.opus
+*.amr
+*.silk
+*.slk
+
+# secrets & local config
+config.json
+config.local.json
+.env
+.env.*
+*.pem
+*.p12
+*.key
+credentials*
+.dsh/
+
+# logs & temp
+*.log
+*.tmp
+tmp/
+scratch/
+.DS_Store
+Thumbs.db
+
+# backups
+*.bak
+*.bak-*
+*~

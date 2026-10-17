@@ -1,0 +1,15 @@
+{
+  "_说明": "语音输入侧只需要 localStt 一段；tts 属于输出侧，见 ../voice-out/config.example.json。",
+  "socialV2": {
+    "voice": {
+      "localStt": {
+        "enabled": true,
+        "module": "<你的 voice-stt 目录>/stt-core.cjs",
+        "maxBytes": 20971520,
+        "downloadTimeoutMs": 60000,
+        "backfill": true,
+        "backfillMax": 10
+      }
+    }
+  }
+}

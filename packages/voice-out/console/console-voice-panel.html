@@ -1,0 +1,106 @@
+<!-- ===== 从 qq-bridge-main/public/console.html 抽取 =====
+     [A] 工具开关复选框：第 2036 行
+     [B] 「语音库与语音发送（调试）」面板 HTML：第 2041-2060 行
+     [C] 面板 JS（loadVoiceLibrary / sendVoiceFromConsole）：第 3102-3167 行
+     [D] 进入二代仿真页时按需加载的钩子：第 4273-4274 行
+     接进你自己的 public/console.html 对应位置即可。
+-->
+
+<!-- [A] 工具开关（放在二代仿真的工具开关列表里） -->
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendVoice"> <span><b>qq_send_voice / qq_list_voices</b><span class="meta">发送语音条（只能发语音库里的音频；偶然而为的强表达）</span></span></label>
+
+<!-- [B] 调试面板 -->
+<details class="settings-group"><summary>语音库与语音发送（调试）</summary><div class="settings-content">
+      <div class="meta" style="margin-bottom:8px">
+        语音库目录：<code>qq-bridge/audio/</code>（改 <code>socialV2.voice.dir</code> 可换）。把音频文件丢进去即可被 AI 用 <code>qq_send_voice</code> 发出；
+        本面板用于调试与试发 —— 试发走的是与 AI 通道相同的解析/校验/限流路径（<code>/api/voice/send</code>），只是由你在控制台触发。
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+        <button id="voiceRefreshBtn" type="button" class="btn-secondary">刷新语音库</button>
+        <label style="flex:0 0 auto">发送目标</label>
+        <input type="text" id="voiceSendTarget" placeholder="group:100005" style="width:190px">
+        <label style="flex:0 0 auto"><input type="checkbox" id="voiceSendDryRun" style="width:auto"> 只校验不发送</label>
+        <button id="voiceSendBtn" type="button">试发选中语音</button>
+        <span id="voiceMsg" class="meta"></span>
+      </div>
+      <div id="voiceList" class="meta" style="margin-top:8px">点「刷新语音库」加载…</div>
+      <div class="meta" style="margin-top:6px">
+        上限：时长 <code>maxSeconds</code>、体积 <code>maxBytes</code>、频率 <code>maxPerMinute</code>/<code>maxPerHour</code>（见下方配置区）。
+        命令行等价工具：<code>node scripts/send-voice.mjs list-voice</code>（经桥接）或 <code>node voice-cli.mjs</code>（独立工具，在上级 <code>voice-tool/</code> 里直连 SnowLuma）。
+      </div>
+
+      </div></details>
+
+<!-- [C] 面板 JS -->
+<script>
+// ── 语音库与语音发送（调试面板） ───────────────────────────────────────────
+// 试发走 /api/voice/send（操作者通道，凭控制台令牌），与 CLI 同一条路径 ——
+// 所以这里能验证「白名单 / 时长体积上限 / 限流 / 文件名审计」是不是真的生效。
+let voiceEntries = [];
+let voiceLibraryLoaded = false;
+// 只在首次进入/手动刷新时拉取：语音库会逐个 ffprobe 探测时长，放进 3 秒轮询会白白压网关。
+async function loadVoiceLibrary(force) {
+  if (voiceLibraryLoaded && force !== true) return;
+  const box = document.getElementById('voiceList');
+  const msg = document.getElementById('voiceMsg');
+  try {
+    const r = await api('/api/voice/list?probe=1');
+    voiceEntries = Array.isArray(r.voices) ? r.voices : [];
+    voiceLibraryLoaded = true;
+    if (!voiceEntries.length) {
+      box.innerHTML = '语音库是空的：把音频文件放进 <code>qq-bridge/audio/</code> 后点「刷新语音库」。';
+      return;
+    }
+    const limits = r.limits || {};
+    box.innerHTML = '共 ' + voiceEntries.length + ' 个（上限：' + (limits.maxSeconds || '?') + ' 秒 / '
+      + Math.round((limits.maxBytes || 0) / 1024 / 1024) + ' MiB / ' + (limits.maxPerMinute || '?') + ' 每分钟）：<br>'
+      + voiceEntries.map((v, i) => {
+        const bad = v.ok === false;
+        // v.name / v.error / v.detail 来自语音库的文件名与探测结果，属于**外部数据**：
+        // 语音库目录里放一个名为 `x<img src=x onerror=...>.mp3` 的文件即可注入脚本
+        // （CSP 允许 unsafe-inline，拦不住内联事件处理器）。所有插值都必须过 esc()。
+        return '<label style="display:block;margin:2px 0">'
+          + '<input type="radio" name="voicePick" value="' + i + '"' + (i === 0 ? ' checked' : '') + '> '
+          + '<code>' + esc(v.name) + '</code> ' + (bad ? '❌ ' + esc(v.error || '不可用') : esc(v.detail || ''))
+          + '</label>';
+      }).join('');
+  } catch (error) {
+    box.textContent = '加载失败：' + (error && error.message ? error.message : error);
+  }
+  if (msg) msg.textContent = '';
+}
+
+async function sendVoiceFromConsole() {
+  const msg = document.getElementById('voiceMsg');
+  const target = document.getElementById('voiceSendTarget').value.trim();
+  const dryRun = document.getElementById('voiceSendDryRun').checked;
+  const pick = document.querySelector('input[name="voicePick"]:checked');
+  if (!target) { msg.textContent = '❌ 请填发送目标（如 group:100005）'; msg.className = 'meta err'; return; }
+  if (!pick) { msg.textContent = '❌ 先刷新语音库并选中一个音频'; msg.className = 'meta err'; return; }
+  const entry = voiceEntries[Number(pick.value)];
+  msg.textContent = '发送中…'; msg.className = 'meta';
+  try {
+    const r = await api('/api/voice/send', 'POST', { target, file: entry.name, dryRun });
+    if (r.dryRun) {
+      msg.textContent = '✅ 校验通过（未发送）：' + (r.detail || '');
+      msg.className = 'meta ok';
+    } else if (r.ok) {
+      msg.textContent = '✅ 已发出 messageId=' + (r.messageId ?? '?')
+        + (r.detail ? '（' + r.detail + '）' : '')
+        + (r.verified ? '，已回读校验为语音段' : '，未能回读校验');
+      msg.className = 'meta ok';
+    } else {
+      msg.textContent = '❌ ' + (r.error || '失败');
+      msg.className = 'meta err';
+    }
+  } catch (error) {
+    msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+    msg.className = 'meta err';
+  }
+}
+
+</script>
+
+<!-- [D] 页面切换钩子 -->
+  // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
+  if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();

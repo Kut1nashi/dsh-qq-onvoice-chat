@@ -1,0 +1,35 @@
+{
+  "name": "dsh-qq-onvoice-chat",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Voice I/O and chat-persona bundle for a QQ auto-chat agent on DeepSeek Harness",
+  "keywords": [
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "snowluma",
+    "text-to-speech",
+    "speech-to-text",
+    "gpt-sovits",
+    "sensevoice",
+    "sherpa-onnx"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "node scripts/check-syntax.mjs",
+    "test": "node tests/smoke.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kut1nashi/dsh-qq-onvoice-chat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Kut1nashi/dsh-qq-onvoice-chat/issues"
+  },
+  "homepage": "https://github.com/Kut1nashi/dsh-qq-onvoice-chat#readme"
+}

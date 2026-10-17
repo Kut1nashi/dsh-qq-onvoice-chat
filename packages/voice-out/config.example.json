@@ -1,0 +1,30 @@
+{
+  "_说明": "把这段并入你自己的 qq-bridge-main/config.json。enabled 与 tools.sendVoice 都必须为 true，语音工具才会暴露给 AI。",
+  "socialV2": {
+    "tools": {
+      "sendVoice": true
+    },
+    "voice": {
+      "enabled": true,
+      "dir": "audio",
+      "maxSeconds": 300,
+      "maxBytes": 20971520,
+      "maxPerMinute": 6,
+      "maxPerHour": 60,
+      "allowAbsolutePath": false,
+      "defaultVolume": 1,
+      "loudness": "normal",
+      "ffmpegPath": "",
+      "autoReadback": true,
+      "tts": {
+        "enabled": true,
+        "module": "<你的 voice-tts 目录>/tts-core.cjs",
+        "replyProbability": 0.05,
+        "textLang": "zh",
+        "promptLang": "zh",
+        "maxChars": 200,
+        "timeoutMs": 120000
+      }
+    }
+  }
+}
