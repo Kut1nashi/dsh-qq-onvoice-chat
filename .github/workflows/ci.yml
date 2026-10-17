@@ -33,7 +33,7 @@ jobs:
           set -euo pipefail
           if grep -rnE "sk-[A-Za-z0-9]{20,}|D:/Deeeeeepseeeeek|C:\\\\Users\\\\[A-Za-z]+" \
                --include="*.js" --include="*.mjs" --include="*.cjs" \
-               --include="*.json" --include="*.md" --include="*.yml" . ; then
+               --include="*.json" --include="*.md" --include="*.yml" \n               --exclude-dir=.git --exclude-dir=.github . ; then
             echo "::error::found secret or machine-specific path"
             exit 1
           fi
