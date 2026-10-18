@@ -13,10 +13,12 @@ tts.available()          // → boolean：默认运行依赖、参考音频及�
 tts.needsReference()     // → boolean：运行依赖齐备，但缺参考音频或非空原文
 tts.synthesize(text, opts)
 //   opts: { refAudio?, promptText?, promptLang?, textLang?, splitMethod?,
-//           timeoutMs?, startTimeoutMs?, queueTimeoutMs?, maxBytes?, outDir?, log? }
-//   → { path: string, bytes: number, ms: number, timings: {...} }
+//           timeoutMs?, startTimeoutMs?, queueTimeoutMs?, maxBytes?, minAudioSeconds?, outDir?, log? }
+//   → { path: string, bytes: number, seconds: number, ms: number, timings: {...} }
 tts.ensureServer({ log, waitMs: 300000 })  // 复用已响应端口或启动服务；并发共用一次启动
-tts.warmup({ log })        // 预热
+tts.warmup({ log })        // 仅探活
+tts.warmup({ text: '这是一段用于预热语音合成的测试文本。', promptLang: 'ja', log })
+// → boolean：实际推理、校验并删除预热文件；失败false并记录原因
 tts.probe(timeoutMs)       // 探测 HTTP 存活；不保证合成请求成功
 tts.referenceText()        // 读 ref/sally_ref.txt
 tts.cutReference(srcFile, startSec, durSec, opts)  // 从视频里切参考音频
@@ -98,7 +100,8 @@ GPT-SoVITS 自带的 `api_v2.py` 是个 FastAPI，合成请求使用 `POST /tts`
 | `batch_size` / `media_type` / `streaming_mode` | `1` / `wav` / `false` |
 
 启动参数（适配器自己拼的）：`-a <host> -p <port> -c <tts_infer.yaml>`。
-服务启动可能需要加载模型；启动预算默认300秒（保守值，冷启动尚未实测）。
+服务启动预算默认300秒；v5手动启动到HTTP响应33.5/43.8秒、首条推理45.7秒。
+这些不是本轮适配器spawn/新预热的实机验证；HTTP响应不代表模型已完成惰性加载。
 `timeoutMs` 默认120秒；自动回复默认最多80字符，超出时发文本，不截断回复。
 实测107字符耗时51.3–66.1秒；200字符可能超时是外推风险，尚未实测。
 
@@ -113,16 +116,19 @@ GPT-SoVITS 自带的 `api_v2.py` 是个 FastAPI，合成请求使用 `POST /tts`
 | `startTimeoutMs` | 300000 | 探活及本地服务启动 |
 | `timeoutMs` | 120000 | HTTP 合成，包含响应体读取 |
 | `maxBytes` | 20971520 | 音频响应体上限，自动回复沿用 `voice.maxBytes` |
+| `minAudioSeconds` | 1 | 较长文本产物的秒数下限，非负有限数；0关闭启发式 |
 
-这些限制均为正整数。各阶段独立计时，总等待时间可能为三个超时之和。
+超时和字节限制为正整数，时长下限为非负有限数。各阶段独立计时，总等待时间可能为三个超时之和。
 DS实机反馈中，15秒排队预算下三请求仅1条成功，60秒时3条成功；v4复验默认90秒预算时
 三短句3/3成功，总19.12秒。不保证任何长度和并发下都能完成。请按本机 `slotMs` / `queueMs` 的P95、
 可接受等待和文本降级率调整。已有配置中的15秒/200字符不会自动迁移，请同步更新。
-响应按流读取并限制大小，检查 RIFF/WAVE 文件头后才保存；非音频、空内容、
-HTTP 错误均不产出成功结果。WAV 文件头检查不能代替实际解码或试听。
+响应按流读取并限制大小，检查WAV的fmt/data样本帧与时长后才保存；非音频、空数据、截断、
+HTTP错误均不产出成功结果。未压缩PCM/浮点格式支持范围与部署细节见 [运维说明](../../../docs/TTS-OPERATIONS.md)。
+至少10个中日韩文字/数字或10个单词时应用默认1秒下限，拒绝明显碎片；
+短回复或单个英文词不应用此下限。规则可配置且不是漏字、静音或音质判定。
 服务探活保留无参数 `GET /tts`，任一HTTP响应（含404/500）都表示端口已被占用；
 探活响应体会释放。实际 `api_v2` 可对裸GET返回500、对合法POST返回200，不能因此重复启动。
-`probe()` / `warmup()` 成功只代表HTTP存活，不验证模型、路由或推理能力；
+`probe()`及不传text的 `warmup()`成功只代表HTTP存活，不验证模型、路由或推理能力；
 若该端口运行了其它HTTP服务，也不会抢占端口，合法POST的错误会原样进入合成异常。
 
 启动异常、进程提前退出、启动超时都会抛错并清理本次启动的子进程。
@@ -130,6 +136,10 @@ HTTP 错误均不产出成功结果。WAV 文件头检查不能代替实际解�
 可检查服务日志或调用 `stop()` 后重试。
 `stop()` 会取消正在等待的启动、拒绝排队请求，并终止本模块启动的进程；
 不会终止外部启动的服务。已发往外部服务的推理仍受 `timeoutMs` 控制。
+外部NSSM/systemd管理Python时，在加载适配器前设置Node进程的 `VOICE_TTS_AUTO_START=false`，
+端口未响应时将报错而不spawn，避免两个管理者争抢端口；默认仍按请求启动，不是持续守护。
+推理预热需显式传text，在放行正常请求前执行，避免初次惰性加载挤占排队预算。
+新防护及预热没有自动重启外部服务，降级态根因仍待模型侧诊断。
 
 ## 自检
 
@@ -152,3 +162,5 @@ node tts-core.cjs "这是一条语音回复测试。"
 | `TTS 合成队列已满` / `排队超时` | 请求积压，自动回复会降级为文本 |
 | `TTS 返回无效 WAV 音频` | 服务返回空内容、JSON 或其它非 WAV 数据 |
 | `TTS 音频超过上限` | 返回音频超过 `maxBytes`，检查文本长度与服务输出 |
+| `TTS 音频异常过短` | 较长文本生成明显碎片，退回文本并检查引擎加载状态；需要时校准minAudioSeconds |
+| `按需启动已关闭` | 外部守护模式下端口未响应，检查NSSM/systemd状态；不要额外再拉一个模型 |

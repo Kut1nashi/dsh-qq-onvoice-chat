@@ -107,12 +107,13 @@ export function summarizeTimings(rows) {
 }
 
 function parseArgs(args) {
-  const opts = { runs: 3, concurrency: 3, queueTimeoutMs: 90000, textLang: 'zh', promptLang: 'zh',
+  const opts = { runs: 3, concurrency: 3, queueTimeoutMs: 90000, minAudioSeconds: 1, textLang: 'zh', promptLang: 'zh',
     label: 'default', outDir: 'tts-benchmark-results',
     engine: fileURLToPath(new URL('../packages/voice-out/engines/tts-core.cjs', import.meta.url)) };
   const keys = { '--engine': 'engine', '--runs': 'runs', '--concurrency': 'concurrency', '--label': 'label',
     '--out-dir': 'outDir', '--ref-audio': 'refAudio', '--prompt-text-file': 'promptTextFile',
-    '--text-lang': 'textLang', '--prompt-lang': 'promptLang', '--queue-timeout-ms': 'queueTimeoutMs' };
+    '--text-lang': 'textLang', '--prompt-lang': 'promptLang', '--queue-timeout-ms': 'queueTimeoutMs',
+    '--min-audio-seconds': 'minAudioSeconds' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help') return { help: true };
     if (!keys[args[i]] || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`参数错误：${args[i]}`);
@@ -124,6 +125,8 @@ function parseArgs(args) {
   }
   opts.queueTimeoutMs = Number(opts.queueTimeoutMs);
   if (!Number.isInteger(opts.queueTimeoutMs) || opts.queueTimeoutMs < 1 || opts.queueTimeoutMs > 2147483647) throw new Error('queueTimeoutMs 超出范围');
+  opts.minAudioSeconds = Number(opts.minAudioSeconds);
+  if (!Number.isFinite(opts.minAudioSeconds) || opts.minAudioSeconds < 0) throw new Error('minAudioSeconds 必须是大于等于0的有限秒数');
   return opts;
 }
 
@@ -133,6 +136,7 @@ export function markdown(report) {
     '首次调用不等于冷启动：服务此前可能已运行。P95 采用最近秩法，少量样本只能用于观察。', ''];
   lines.push(`排队超时：${report.queueTimeoutMs}ms（默认与自动回复的90000ms一致）。`, '');
   lines.push(`目标文本语言：${report.textLang}；参考原文语言：${report.promptLang}。`, '');
+  lines.push(`传给适配器的短音频下限：${report.minAudioSeconds}秒（至少10个中日韩字符/数字，或10个单词时生效；0关闭，旧适配器可能忽略）。`, '');
   if (report.blockedReason) lines.push(`未完成真实合成：${report.blockedReason}`, '');
   if (report.reference) {
     lines.push(`参考原文已提供：${report.reference.promptTextPresent}；参考音频时长：${report.reference.audio?.seconds ?? '无法分析'}秒。`, '');
@@ -165,7 +169,7 @@ export function markdown(report) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log('node scripts/benchmark-tts.mjs [--engine tts-core.cjs] [--runs 3] [--concurrency 3] [--queue-timeout-ms 90000] [--text-lang zh] [--prompt-lang zh] [--label default] [--out-dir directory] [--ref-audio reference.wav] [--prompt-text-file reference.txt]');
+    console.log('node scripts/benchmark-tts.mjs [--engine tts-core.cjs] [--runs 3] [--concurrency 3] [--queue-timeout-ms 90000] [--min-audio-seconds 1] [--text-lang zh] [--prompt-lang zh] [--label default] [--out-dir directory] [--ref-audio reference.wav] [--prompt-text-file reference.txt]');
     return;
   }
   const outDir = path.resolve(opts.outDir);
@@ -175,7 +179,7 @@ async function main() {
   const report = { createdAt: new Date().toISOString(), label: opts.label, status: 'blocked',
     runtime: { node: process.version, platform: process.platform, cpu: os.cpus()[0]?.model, cpuCount: os.cpus().length },
     runs: opts.runs, concurrency: opts.concurrency, queueTimeoutMs: opts.queueTimeoutMs,
-    textLang: opts.textLang, promptLang: opts.promptLang, rows: [], summary: {} };
+    textLang: opts.textLang, promptLang: opts.promptLang, minAudioSeconds: opts.minAudioSeconds, rows: [], summary: {} };
   let engine;
   try {
     engine = require(path.resolve(opts.engine));
@@ -194,6 +198,7 @@ async function main() {
     report.serviceAlreadyRunning = typeof engine.probe === 'function' ? await engine.probe(2500) : undefined;
     const options = { refAudio, ...(promptText !== undefined ? { promptText } : {}),
       textLang: opts.textLang, promptLang: opts.promptLang,
+      minAudioSeconds: opts.minAudioSeconds,
       outDir: runDir, queueTimeoutMs: opts.queueTimeoutMs, log: (m) => console.log(String(m)) };
     const run = async (phase, c) => {
       console.log(`[${phase}/${c.id}] 合成 ${[...c.text].length} 字符…`);

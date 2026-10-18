@@ -15,13 +15,16 @@ const engineSource = fs.readFileSync(new URL('../packages/voice-out/engines/tts-
 const bridgeSource = fs.readFileSync(new URL('../packages/voice-out/bridge/voice-out.tts.js', import.meta.url), 'utf8');
 const sendSource = fs.readFileSync(new URL('../packages/voice-out/bridge/voice-out.core.js', import.meta.url), 'utf8');
 
-function wav() {
-  const out = Buffer.alloc(46);
-  out.write('RIFF'); out.writeUInt32LE(38, 4); out.write('WAVEfmt ', 8);
-  out.writeUInt32LE(16, 16); out.writeUInt16LE(1, 20); out.writeUInt16LE(1, 22);
-  out.writeUInt32LE(32000, 24); out.writeUInt32LE(64000, 28);
-  out.writeUInt16LE(2, 32); out.writeUInt16LE(16, 34);
-  out.write('data', 36); out.writeUInt32LE(2, 40);
+function wav(seconds, { sampleRate = 32000, channels = 1, bits = 16 } = {}) {
+  const frames = seconds === undefined ? 1 : Math.round(sampleRate * seconds);
+  const blockAlign = channels * bits / 8;
+  const size = frames * blockAlign;
+  const out = Buffer.alloc(44 + size + size % 2);
+  out.write('RIFF'); out.writeUInt32LE(out.length - 8, 4); out.write('WAVEfmt ', 8);
+  out.writeUInt32LE(16, 16); out.writeUInt16LE(1, 20); out.writeUInt16LE(channels, 22);
+  out.writeUInt32LE(sampleRate, 24); out.writeUInt32LE(sampleRate * blockAlign, 28);
+  out.writeUInt16LE(blockAlign, 32); out.writeUInt16LE(bits, 34);
+  out.write('data', 36); out.writeUInt32LE(size, 40);
   return out;
 }
 
@@ -125,7 +128,7 @@ test('existing external server is reused and never terminated by stop', async (t
     ? new Response(wav()) : new Response(null, { status: 500 }) });
   const ready = await api.ensureServer();
   assert.equal(ready.started, false);
-  assert.equal((await api.synthesize('existing server')).bytes, wav().length);
+  assert.equal((await api.synthesize('已有服务')).bytes, wav().length);
   api.stop();
   assert.equal(calls.length, 0);
 });
@@ -233,7 +236,7 @@ test('synthesis sends JSON POST and writes the returned WAV with a unique absolu
     return opts.method === 'POST' ? new Response(wav()) : new Response(null, { status: 400 });
   } });
   const text = '你好 & ? #\n世界'.repeat(500);
-  const first = await api.synthesize(` ${text} `, { promptText: '参考\n 原文', splitMethod: 'cut2' });
+  const first = await api.synthesize(` ${text} `, { promptText: '参考\n 原文', splitMethod: 'cut2', minAudioSeconds: 0 });
   const second = await api.synthesize('再次合成');
   const request = requests.find((r) => r.method === 'POST');
   const payload = JSON.parse(request.body);
@@ -283,10 +286,107 @@ test('empty input, missing reference and invalid limits fail before network work
   const { api } = engine(t, { fetch: async () => { fetched = true; } });
   await assert.rejects(api.synthesize('  '), /文本为空/);
   await assert.rejects(api.synthesize('test', { refAudio: '/missing-ref.wav' }), /参考音频不存在/);
-  for (const options of [{ timeoutMs: -1 }, { maxBytes: Infinity }, { queueTimeoutMs: 0 }, { startTimeoutMs: NaN }]) {
+  for (const options of [{ timeoutMs: -1 }, { maxBytes: Infinity }, { queueTimeoutMs: 0 }, { startTimeoutMs: NaN },
+    { minAudioSeconds: -1 }, { minAudioSeconds: Infinity }, { minAudioSeconds: NaN }]) {
     await assert.rejects(api.synthesize('test', options), /必须是/);
   }
   assert.equal(fetched, false);
+});
+
+test('a 0.32-second fragment for long text is rejected before saving; short replies and later synthesis still work', async (t) => {
+  const fragment = wav(0.32, { sampleRate: 48000 });
+  assert.equal(fragment.length, 30764);
+  const results = [fragment, fragment, wav(2.72, { sampleRate: 48000 })];
+  const { api, root, calls } = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(results.shift()) : new Response(null, { status: 500 }) });
+  await assert.rejects(api.synthesize('这是一段应该被完整读出的中文文本。'), /音频异常过短.*0\.320秒.*HTTP 200.*30764B/);
+  assert.equal(fs.existsSync(path.join(root, 'out')), false);
+  assert.equal((await api.synthesize('嗯。')).seconds, 0.32);
+  assert.equal((await api.synthesize('这是一段应该被完整读出的中文文本。')).seconds, 2.72);
+  assert.equal(calls.length, 0);
+});
+
+test('duration guard distinguishes longer text from punctuation, short acknowledgements and one English word', async (t) => {
+  const { api } = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(wav(0.32)) : new Response(null, { status: 400 }) });
+  assert.equal((await api.synthesize('你好，！！！😀😀😀😀😀😀😀😀😀😀')).seconds, 0.32);
+  assert.equal((await api.synthesize('understanding', { textLang: 'en' })).seconds, 0.32);
+  await assert.rejects(api.synthesize('one two three four five six seven eight nine ten', { textLang: 'en' }), /音频异常过短/);
+  await assert.rejects(api.synthesize('1234567890'), /音频异常过短/);
+  assert.equal((await api.synthesize('1234567890', { minAudioSeconds: 0 })).seconds, 0.32);
+  assert.equal((await api.synthesize('1234567890', { minAudioSeconds: 0.2 })).seconds, 0.32);
+});
+
+test('WAV duration follows data frames across channel/rate/bit-depth variants and ignores padded metadata', async (t) => {
+  const audio = wav(1.25, { sampleRate: 44100, channels: 2, bits: 24 });
+  const metadata = Buffer.alloc(10); metadata.write('JUNK'); metadata.writeUInt32LE(1, 4);
+  const padded = Buffer.concat([audio.subarray(0, 12), metadata, audio.subarray(12)]);
+  padded.writeUInt32LE(padded.length - 8, 4);
+  const { api } = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(padded) : new Response(null, { status: 400 }) });
+  assert.equal((await api.synthesize('这是一段正常长度的测试用中文文本。')).seconds, 1.25);
+  const fragment = wav(0.32);
+  const largeMetadata = Buffer.alloc(65544); largeMetadata.write('JUNK'); largeMetadata.writeUInt32LE(65536, 4);
+  const large = Buffer.concat([fragment, largeMetadata]); large.writeUInt32LE(large.length - 8, 4);
+  const oversized = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(large) : new Response(null, { status: 400 }) });
+  await assert.rejects(oversized.api.synthesize('这是一段应该被完整读出的中文文本。'), /音频异常过短.*0\.320秒/);
+});
+
+test('empty, truncated and inconsistent WAV data blocks are refused and the slot recovers', async (t) => {
+  const original = wav(1);
+  const empty = original.subarray(0, 44); empty.writeUInt32LE(0, 40);
+  const badRate = wav(1); badRate.writeUInt32LE(1, 28);
+  const badAlign = wav(1); badAlign.writeUInt16LE(3, 32);
+  const partial = wav(1).subarray(0, 50);
+  const responses = [empty, badRate, badAlign, partial, wav(1)];
+  const { api, root } = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(responses.shift()) : new Response(null, { status: 400 }) });
+  for (let i = 0; i < 4; i++) await assert.rejects(api.synthesize('检查'), /无效 WAV/);
+  assert.equal(fs.existsSync(path.join(root, 'out')), false);
+  assert.equal((await api.synthesize('恢复')).seconds, 1);
+});
+
+test('inference warmup is opt-in, sends one real synthesis request and removes its generated WAV', async (t) => {
+  const posts = [];
+  const { api, root } = engine(t, { fetch: async (_, opts) => {
+    if (opts.method !== 'POST') return new Response(null, { status: 500 });
+    posts.push(JSON.parse(opts.body)); return new Response(wav(2.72));
+  } });
+  assert.equal(await api.warmup(), true);
+  assert.equal(posts.length, 0);
+  const outDir = path.join(root, 'warmup');
+  assert.equal(await api.warmup({ text: '这是一段用于检查语音合成状态的预热文本。',
+    promptLang: 'ja', outDir, waitMs: 1000 }), true);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].prompt_lang, 'ja');
+  assert.deepEqual(fs.readdirSync(outDir), []);
+});
+
+test('failed inference warmup returns false, logs the fragment and leaves no artifact or stuck model slot', async (t) => {
+  let posts = 0; const logs = [];
+  const { api, root } = engine(t, { fetch: async (_, opts) => opts.method === 'POST'
+    ? new Response(wav(++posts === 1 ? 0.32 : 2.72)) : new Response(null, { status: 500 }) });
+  assert.equal(await api.warmup({ text: '这是一段用于检查语音合成状态的预热文本。', log: (line) => logs.push(line) }), false);
+  assert.ok(logs.some((line) => /预热失败.*音频异常过短/.test(line)));
+  assert.equal(fs.existsSync(path.join(root, 'out')), false);
+  assert.equal((await api.synthesize('恢复')).seconds, 2.72);
+});
+
+test('external supervision mode never spawns on failure and recovers by reusing the supervisor endpoint', async (t) => {
+  let online = false;
+  const { api, calls } = engine(t, { env: { VOICE_TTS_AUTO_START: 'false' }, fetch: async (_, opts) => {
+    if (!online) throw new Error('offline');
+    return opts.method === 'POST' ? new Response(wav(2.72)) : new Response(null, { status: 500 });
+  } });
+  assert.equal(api.AUTO_START, false);
+  await assert.rejects(api.ensureServer(), /按需启动已关闭/);
+  assert.equal(await api.warmup({ text: '这是一段用于检查语音合成状态的预热文本。' }), false);
+  online = true;
+  assert.equal((await api.ensureServer()).started, false);
+  assert.equal(await api.warmup({ text: '这是一段用于检查语音合成状态的预热文本。' }), true);
+  api.stop();
+  assert.equal(calls.length, 0);
 });
 
 test('output directory failure releases the model slot for later synthesis', async (t) => {
@@ -476,13 +576,15 @@ test('bridge applies the slow-host defaults, keeps explicit budgets and skips re
   assert.equal(options[0].queueTimeoutMs, 90000);
   assert.equal(options[0].startTimeoutMs, 300000);
   assert.equal(options[0].timeoutMs, 120000);
+  assert.equal(options[0].minAudioSeconds, 1);
   const configured = bridge({ ttsCoreModule: adapter, voiceCfg: () => ({ tts: {
-    replyProbability: 1, maxChars: 100, queueTimeoutMs: 60000, startTimeoutMs: 240000, timeoutMs: 200000
+    replyProbability: 1, maxChars: 100, queueTimeoutMs: 60000, startTimeoutMs: 240000, timeoutMs: 200000, minAudioSeconds: 0
   } }) });
   assert.equal((await configured.reply('private:123', '文'.repeat(81))).sent, true);
   assert.equal(options[1].queueTimeoutMs, 60000);
   assert.equal(options[1].startTimeoutMs, 240000);
   assert.equal(options[1].timeoutMs, 200000);
+  assert.equal(options[1].minAudioSeconds, 0);
 });
 
 test('bridge cleans up generated files after successful send and commits once', async () => {

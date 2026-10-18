@@ -150,6 +150,7 @@ npm i link:<本仓库>\plugins\qq-agent-presets link:<本仓库>\plugins\qq-mode
 | [docs/TTS-BENCHMARK.md](docs/TTS-BENCHMARK.md) | 本机合成速度、排队及试听效果测试 |
 | [docs/TTS-IMPROVEMENT-LOG.md](docs/TTS-IMPROVEMENT-LOG.md) | 本次TTS改进、验证证据、限制及后续方向 |
 | [docs/DS-TTS-TEST.md](docs/DS-TTS-TEST.md) | 可直接交给DS执行的本机测试任务与回传模板 |
+| [docs/TTS-OPERATIONS.md](docs/TTS-OPERATIONS.md) | 短音频防护、推理预热及NSSM/systemd守护部署 |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | 逐函数接线清单、行号锚点、开关与路由 |
 | [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md) | 这套东西是怎么长出来的：能力、决策、踩过的坑 |
 | [SECURITY.md](SECURITY.md) | 威胁模型与私密报告方式 |

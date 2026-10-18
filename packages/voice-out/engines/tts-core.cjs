@@ -47,6 +47,8 @@ const DEFAULT_REF_TEXT_FILE = path.join(REF_DIR, 'sally_ref.txt');
 const HOST = process.env.VOICE_TTS_HOST || '127.0.0.1';
 const PORT = Number(process.env.VOICE_TTS_PORT || 9880);
 const BASE = `http://${HOST}:${PORT}`;
+// 外部守护服务管理进程时关闭按需启动，避免两个进程管理者抢占同一端口。
+const AUTO_START = !['0', 'false', 'off', 'no'].includes(String(process.env.VOICE_TTS_AUTO_START ?? 'true').trim().toLowerCase());
 
 let serverProc = null;
 let serverStarting = null;
@@ -132,6 +134,7 @@ async function ensureServer(options = {}) {
     if (serverProc && serverProc.exitCode === null && serverProc.signalCode == null) {
       throw new Error('TTS 服务进程仍在运行但探活失败，请检查服务日志');
     }
+    if (!AUTO_START) throw new Error('TTS 服务未响应，按需启动已关闭（VOICE_TTS_AUTO_START）；请检查外部守护服务');
     if (Date.now() - t0 >= waitMs) throw new Error(`TTS 服务启动超时（${waitMs}ms）`);
     for (const f of [PY, API, CFG]) {
       if (!exists(f)) throw new Error(`缺少 GPT-SoVITS 文件：${f}`);
@@ -186,14 +189,54 @@ async function ensureServer(options = {}) {
   return serverStarting;
 }
 
-/** 预热：确保服务有 HTTP 响应；不执行推理，首次合成仍可能有模型预热开销。 */
+/** 不传text时仅探活；传text时执行一次合成及产物校验，删除预热WAV后返回boolean。 */
 async function warmup(options = {}) {
   try {
-    await ensureServer(options);
+    if (options.text === undefined) await ensureServer(options);
+    else {
+      const out = await synthesize(options.text, {
+        ...options, startTimeoutMs: options.startTimeoutMs ?? options.waitMs
+      });
+      await fs.promises.unlink(out.path);
+    }
     return true;
-  } catch {
+  } catch (error) {
+    try { options.log?.(`[tts] 预热失败：${error?.message ?? error}`); } catch {}
     return false;
   }
+}
+
+/** 读取未压缩WAV的实际样本时长；不依赖文件总大小，不把HTTP200当作音频完整性证明。 */
+function wavSeconds(buf) {
+  const invalid = () => new Error('TTS 返回无效 WAV 音频：格式、样本帧或数据块不完整');
+  if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') throw invalid();
+  let fmt = null; let dataBytes = 0;
+  for (let at = 12; at + 8 <= buf.length;) {
+    const id = buf.toString('ascii', at, at + 4);
+    const size = buf.readUInt32LE(at + 4);
+    const start = at + 8;
+    if (size > buf.length - start) throw invalid();
+    if (id === 'fmt ' && size >= 16) {
+      let format = buf.readUInt16LE(start);
+      if (format === 0xfffe && size >= 40) format = buf.readUInt16LE(start + 24);
+      const channels = buf.readUInt16LE(start + 2);
+      const sampleRate = buf.readUInt32LE(start + 4);
+      const byteRate = buf.readUInt32LE(start + 8);
+      const blockAlign = buf.readUInt16LE(start + 12);
+      const bits = buf.readUInt16LE(start + 14);
+      if (!channels || !sampleRate || !blockAlign || blockAlign !== channels * bits / 8
+        || byteRate !== sampleRate * blockAlign
+        || !(format === 1 && [8, 16, 24, 32].includes(bits) || format === 3 && [32, 64].includes(bits))) throw invalid();
+      fmt = { sampleRate, blockAlign };
+    }
+    if (id === 'data') {
+      if (!fmt || size % fmt.blockAlign) throw invalid();
+      dataBytes += size;
+    }
+    at = start + size + (size % 2);
+  }
+  if (!fmt || !dataBytes) throw invalid();
+  return dataBytes / fmt.blockAlign / fmt.sampleRate;
 }
 
 /**
@@ -201,8 +244,9 @@ async function warmup(options = {}) {
  * @param {string} text 要合成的文本（简体中文走 textLang 'zh'）。
  * @param {{refAudio?: string, promptText?: string, promptLang?: string, textLang?: string,
  *   splitMethod?: string, timeoutMs?: number, startTimeoutMs?: number,
- *   queueTimeoutMs?: number, maxBytes?: number, outDir?: string, log?: Function}} [options]
- * @returns {Promise<{path: string, bytes: number, ms: number, timings: object}>}
+ *   queueTimeoutMs?: number, maxBytes?: number, minAudioSeconds?: number,
+ *   outDir?: string, log?: Function}} [options]
+ * @returns {Promise<{path: string, bytes: number, seconds: number, ms: number, timings: object}>}
  */
 async function synthesize(text, options = {}) {
   const clean = String(text ?? '').trim();
@@ -219,6 +263,8 @@ async function synthesize(text, options = {}) {
   const queueTimeoutMs = positiveInteger(options.queueTimeoutMs, 90000, 'queueTimeoutMs');
   const startTimeoutMs = positiveInteger(options.startTimeoutMs, 300000, 'startTimeoutMs');
   const maxBytes = positiveInteger(options.maxBytes, 20 * 1024 * 1024, 'maxBytes');
+  const minAudioSeconds = Number(options.minAudioSeconds ?? 1);
+  if (!Number.isFinite(minAudioSeconds) || minAudioSeconds < 0) throw new Error('minAudioSeconds 必须是大于等于0的有限秒数（0关闭短音频防护）');
   const queuedAt = performance.now();
   const release = await acquireSynthesis(queueTimeoutMs);
   const acquiredAt = performance.now();
@@ -248,9 +294,12 @@ async function synthesize(text, options = {}) {
       throw new Error(`TTS HTTP ${res.status}：${body.toString('utf8').slice(0, 300)}`);
     }
     const buf = await readBody(res, maxBytes);
-    if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF'
-      || buf.toString('ascii', 8, 12) !== 'WAVE') {
-      throw new Error('TTS 返回无效 WAV 音频');
+    const seconds = wavSeconds(buf);
+    const cjkOrDigits = (clean.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{N}]/gu) || []).length;
+    const words = (clean.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []).length;
+    // 只防明显碎片；“嗯”或一个较长英文单词不设1秒下限。这是启发式，不是漏字/音质判定。
+    if ((cjkOrDigits >= 10 || words >= 10) && seconds < minAudioSeconds) {
+      throw new Error(`TTS 音频异常过短：${seconds.toFixed(3)}秒 / ${cjkOrDigits}个中日韩文字或数字、${words}个词段（下限${minAudioSeconds}秒，HTTP ${res.status}，${buf.length}B）；请检查引擎加载状态`);
     }
     const receivedAt = performance.now();
     const outDir = path.resolve(options.outDir || OUT_DIR);
@@ -263,7 +312,7 @@ async function synthesize(text, options = {}) {
     }
     const savedAt = performance.now();
     const elapsed = (start, end) => Math.round((end - start) * 1000) / 1000;
-    return { path: out, bytes: buf.length, ms: Date.now() - t0, timings: {
+    return { path: out, bytes: buf.length, seconds, ms: Date.now() - t0, timings: {
       queueMs: elapsed(queuedAt, acquiredAt),
       serverMs: elapsed(acquiredAt, readyAt),
       requestMs: elapsed(readyAt, receivedAt),
@@ -423,6 +472,7 @@ module.exports = {
   GSV_DIR,
   PY,
   FFMPEG,
+  AUTO_START,
   REF_DIR,
   DEFAULT_REF
 };

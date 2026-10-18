@@ -68,6 +68,7 @@
         timeoutMs: Number(tts.timeoutMs) || 120000,
         startTimeoutMs: Number(tts.startTimeoutMs) || 300000,
         queueTimeoutMs: Number(tts.queueTimeoutMs) || 90000,
+        minAudioSeconds: Number(tts.minAudioSeconds ?? 1),
         maxBytes: vc.maxBytes,
         log: (m) => log(String(m))
       });

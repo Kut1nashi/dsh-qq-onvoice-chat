@@ -25,7 +25,8 @@
         "maxChars": 80,
         "timeoutMs": 120000,
         "startTimeoutMs": 300000,
-        "queueTimeoutMs": 90000
+        "queueTimeoutMs": 90000,
+        "minAudioSeconds": 1
       }
     }
   }

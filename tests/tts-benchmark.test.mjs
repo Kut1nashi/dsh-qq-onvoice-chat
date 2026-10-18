@@ -78,6 +78,7 @@ const fs = require('fs'); const path = require('path'); let counter = 0;
 module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), referenceText: () => '参考原文', probe: async () => true, stop() {},
   async synthesize(text, options) {
     if (options.promptLang !== 'ja' || options.textLang !== 'zh') throw new Error('language options did not reach the adapter');
+    if (options.minAudioSeconds !== 0) throw new Error('zero duration threshold was lost');
     const out = path.join(options.outDir, 'generated-' + (++counter) + '.wav');
     fs.copyFileSync(this.DEFAULT_REF, out); return { path: out, ms: 1 };
   }
@@ -86,6 +87,7 @@ module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), referenceText: 
   const script = fileURLToPath(new URL('../scripts/benchmark-tts.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [script, '--engine', path.join(tmp, 'engine.cjs'),
     '--runs', '1', '--concurrency', '2', '--prompt-lang', 'ja', '--text-lang', 'zh',
+    '--min-audio-seconds', '0',
     '--out-dir', path.join(tmp, 'results')], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const dir = path.join(tmp, 'results', fs.readdirSync(path.join(tmp, 'results'))[0]);
@@ -94,6 +96,7 @@ module.exports = { DEFAULT_REF: path.join(__dirname, 'ref.wav'), referenceText: 
   assert.equal(report.queueTimeoutMs, 90000);
   assert.equal(report.promptLang, 'ja');
   assert.equal(report.textLang, 'zh');
+  assert.equal(report.minAudioSeconds, 0);
   assert.equal(report.rows.length, 7);
   assert.equal(report.rows.filter((r) => r.phase.startsWith('parallel-')).length, 2);
   for (const row of report.rows) assert.equal(analyzeWav(fs.readFileSync(path.join(dir, row.file))).seconds, 1.3);

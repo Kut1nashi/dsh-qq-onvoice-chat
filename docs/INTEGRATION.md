@@ -96,8 +96,11 @@ TTS片段遇到没有此声明的旧发送函数，会在合成前以 `sender-no
 `tts.timeoutMs` 默认 120000；分别限制启动、排队和 HTTP 推理时间，配置示例已包含这些字段。
 `tts.maxChars` 默认80；超过上限时完整发文本，不截断。DS实测15秒队列仅1/3成功、60秒时3/3成功，
 因此默认留余量至90秒；v4实机已验证默认三短句3/3成功，总19.12秒。
-300秒启动是保守值，冷启动未实测。已有配置需手动同步这三个值，
+v5手动冷启动HTTP为33.5/43.8秒，首条推理另含惰性加载；本轮适配器spawn/新预热仍待实机复测。已有配置需手动同步这三个值，
 仅更新代码不会覆盖显式设置的15秒/180秒/200字符。按本机阶段P95和降级率继续调整。
+新增 `tts.minAudioSeconds`默认1，按较长文本门槛拒绝明显碎片并退回文本，0仅关闭该启发式。
+规则和 `warmup({text,...})`显式推理预热见 [运维说明](TTS-OPERATIONS.md)。
+NSSM/systemd管理Python时设置Node的 `VOICE_TTS_AUTO_START=false`，先预热成功再放行语音请求。
 
 接入点在统一出站函数 `sendMessagesV2(key, messages, delays, replyToMessageId, atUserId, allowVoice)`
 （原第 8200 行）。整段挂载代码（原第 8200-8211 行，逐字复制）：
