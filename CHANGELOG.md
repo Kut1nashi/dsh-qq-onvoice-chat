@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — TTS 改进（2026-10-17）
+## Unreleased — TTS 改进（2026-10-17，2026-10-18实机复验）
 
 ### Fixed
 
@@ -28,7 +28,8 @@
 - 测速支持 `--prompt-lang` / `--text-lang` 并记录语言条件；空原文生成blocked报告。
 - `npm run bench:tts`：本机语料测速、并发排队观察、WAV 指标、试听清单及 JSON/Markdown 报告。
 - [改进日志](docs/TTS-IMPROVEMENT-LOG.md) 与 [交给 DS 的测试说明](docs/DS-TTS-TEST.md)。
-- [本机测速指南](docs/TTS-BENCHMARK.md)。日志记录DS对旧提交的真实耗时与超时结果；本轮修复复测、听感及QQ端到端仍待本机执行。
+- [本机测速指南](docs/TTS-BENCHMARK.md)。DS v4已复验0b4acc4：探活/进程复用通过、默认90秒三并发3/3成功（19.12秒）、原文预检通过；本次仅更新验收文档。
+- v4基准runs=1，耗时与上轮同量级，不据此宣称加速；冷启动、主观听感与QQ端到端仍未测，80字符耗时为估算。尚未发布v1.1.0。
 
 ## 1.0.0 — 2026-10-18
 

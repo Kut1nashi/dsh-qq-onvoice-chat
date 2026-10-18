@@ -32,8 +32,8 @@ import {
 
 ## 1. 配置节
 
-按 [`packages/voice-out/config.example.json`](packages/voice-out/config.example.json) 与
-[`packages/voice-in/config.example.json`](packages/voice-in/config.example.json) 合并进 `config.json`。
+按 [`packages/voice-out/config.example.json`](../packages/voice-out/config.example.json) 与
+[`packages/voice-in/config.example.json`](../packages/voice-in/config.example.json) 合并进 `config.json`。
 **别忘了两个开关**（见根 README「两个开关是分开的」）：发送侧要 `voice.enabled` 和
 `tools.sendVoice` **同时**为 `true`。
 
@@ -95,7 +95,8 @@ TTS片段遇到没有此声明的旧发送函数，会在合成前以 `sender-no
 `tts.startTimeoutMs` 默认 300000，`tts.queueTimeoutMs` 默认 90000，
 `tts.timeoutMs` 默认 120000；分别限制启动、排队和 HTTP 推理时间，配置示例已包含这些字段。
 `tts.maxChars` 默认80；超过上限时完整发文本，不截断。DS实测15秒队列仅1/3成功、60秒时3/3成功，
-因此默认留余量至90秒；300秒启动是保守值，冷启动未实测。已有配置需手动同步这三个值，
+因此默认留余量至90秒；v4实机已验证默认三短句3/3成功，总19.12秒。
+300秒启动是保守值，冷启动未实测。已有配置需手动同步这三个值，
 仅更新代码不会覆盖显式设置的15秒/180秒/200字符。按本机阶段P95和降级率继续调整。
 
 接入点在统一出站函数 `sendMessagesV2(key, messages, delays, replyToMessageId, atUserId, allowVoice)`
@@ -121,7 +122,7 @@ TTS片段遇到没有此声明的旧发送函数，会在合成前以 `sender-no
    合并成一条语音会破坏它，宁可发文本。
 3. 递归降级调用**故意不再传 `allowVoice`**（默认 `false`），避免合成失败后在文本路径里再次尝试语音。
 
-同段代码另存为 [`packages/voice-out/bridge/voice-out.mount.js`](packages/voice-out/bridge/voice-out.mount.js) 便于对照。
+同段代码另存为 [`packages/voice-out/bridge/voice-out.mount.js`](../packages/voice-out/bridge/voice-out.mount.js) 便于对照。
 
 ### 2.3 HTTP 路由 —— 参考 `packages/voice-out/bridge/voice-out.api-*.js`
 
