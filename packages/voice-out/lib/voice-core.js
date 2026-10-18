@@ -5,7 +5,7 @@
 //     经 `../qq-bridge/src/voice-core.js` 引本文件（唯一实现，不复制）；配置读 voice-tool/config.json
 //   - src/bridge.js：自己管白名单/限流/审计，但音频解析与 ffprobe 探测复用这里
 //
-// 关键设计：ffprobe 结果**写临时文件**而不是走 stdout 管道。
+// 关键设计：ffprobe 的 stdout 直接重定向到临时文件，不创建 stdout 管道。
 // 在受限沙箱（DSH workspace-write / 只读模式）里 spawn 一个 stdio:pipe 的子进程会直接
 // EPERM，而"继承 stdio + 写文件"是允许的。
 import fs from 'node:fs';
@@ -146,7 +146,7 @@ export function safeJoinLibrary(voiceDir, relPath) {
 
 /**
  * ffprobe 探测（时长/编码/sampleRate/channels）。
- * 结果写临时文件回传，stdout/stderr 一律 ignore（受限沙箱下 pipe 会 EPERM）。
+ * stdout 继承已打开的输出文件描述符，不依赖旧版不支持的 -o，也不创建管道。
  */
 export async function probeAudio(file, { ffprobePath = 'ffprobe', timeoutMs = 10000, tmpDir = null } = {}) {
   const dirs = [tmpDir, path.join(os.tmpdir(), 'voice-probe')].filter(Boolean);
@@ -157,27 +157,51 @@ export async function probeAudio(file, { ffprobePath = 'ffprobe', timeoutMs = 10
   if (!dir) return { ok: false, reason: '没有可写的临时目录用于 ffprobe 输出' };
 
   const outFile = path.join(dir, `p-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
+  let outFd = null;
   const run = () => new Promise((resolve) => {
     let child;
+    let timer = null;
+    let grace = null;
+    let settled = false;
+    let timedOut = false;
+    const timeout = { code: -2, error: 'ffprobe 超时' };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer); clearTimeout(grace);
+      resolve(result);
+    };
     try {
       child = spawn(ffprobePath, [
         '-v', 'error',
         '-show_entries', 'format=duration,format_name',
         '-show_entries', 'stream=codec_name,codec_type,sample_rate,channels',
-        '-of', 'json', '-o', outFile, file
-      ], { windowsHide: true, stdio: 'ignore' });
+        '-of', 'json', '-i', file
+      ], { windowsHide: true, stdio: ['ignore', outFd, 'ignore'] });
     } catch (error) {
-      resolve({ code: -1, error: `ffprobe 启动失败：${error?.message ?? error}` });
+      finish({ code: -1, error: `ffprobe 启动失败：${error?.message ?? error}` });
       return;
     }
-    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve({ code: -2, error: 'ffprobe 超时' }); }, timeoutMs);
-    child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, error: `ffprobe 不可用：${e.message}` }); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code }); });
+    child.once('error', (error) => finish(timedOut ? timeout : { code: -1, error: `ffprobe 不可用：${error.message}` }));
+    child.once('close', (code) => finish(timedOut ? timeout : { code }));
+    timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill(); } catch {}
+      if (!settled) grace = setTimeout(() => {
+        // 若系统未及时结束子进程，迟到的close仍负责清理占用中的文件。
+        child.once('close', () => { try { fs.unlinkSync(outFile); } catch {} });
+        finish(timeout);
+      }, 1000);
+    }, timeoutMs);
   });
 
   try {
+    outFd = fs.openSync(outFile, 'wx');
     const res = await run();
+    fs.closeSync(outFd); outFd = null;
     if (res.error) return { ok: false, reason: res.error };
+    if (res.code !== 0) return { ok: false, reason: `ffprobe 失败（退出码 ${res.code}）` };
+    if (fs.statSync(outFile).size > 1024 * 1024) return { ok: false, reason: 'ffprobe 输出超过上限（1 MiB）' };
     let raw = '';
     try { raw = fs.readFileSync(outFile, 'utf8'); }
     catch (error) { return { ok: false, reason: `ffprobe 未产出结果（退出码 ${res.code}，${error?.message ?? error}）` }; }
@@ -196,6 +220,7 @@ export async function probeAudio(file, { ffprobePath = 'ffprobe', timeoutMs = 10
   } catch (error) {
     return { ok: false, reason: `ffprobe 输出解析失败：${error?.message ?? error}` };
   } finally {
+    if (outFd !== null) { try { fs.closeSync(outFd); } catch {} }
     try { fs.unlinkSync(outFile); } catch {}
   }
 }
