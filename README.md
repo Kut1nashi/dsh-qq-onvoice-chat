@@ -142,6 +142,24 @@ npm i link:<本仓库>\plugins\qq-agent-presets link:<本仓库>\plugins\qq-mode
 - 参考音频决定克隆音色，**使用他人声音的授权问题请自行确认**。
 - 本包**未做跨平台端到端实测**，验证范围见 [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md)。
 
+## 音质后处理（可选）
+
+合成音频的底噪与局部高频可以用一套独立的后处理配方改善：全局 `afftdn` NF43 + 可选局部频谱清理（R4）+ 可选高频衰减（HF90）。它是纯 DSP，不是新模型权重，也不改推理参数。
+
+```bash
+cd packages/voice-out/quality
+pip install -r requirements.txt
+python denoise.py input.wav output.wav
+```
+
+只处理合成后的 WAV，需要 48 kHz / 单声道 / PCM16 且未降噪过；局部区间必须由调用方给出，没有区间时只做全局 NF43。详见 [packages/voice-out/quality/README.md](packages/voice-out/quality/README.md) 与 [docs/TTS-QUALITY-REP-FINAL.md](docs/TTS-QUALITY-REP-FINAL.md)。
+
+| 文档 | 内容 |
+|---|---|
+| [docs/TTS-QUALITY-REP-FINAL.md](docs/TTS-QUALITY-REP-FINAL.md) | NF43 + R4 + HF90 参数与链路说明 |
+| [docs/TTS-QUALITY-VALIDATION.md](docs/TTS-QUALITY-VALIDATION.md) | 验证记录、实测数字与没有证明的事 |
+| [docs/TTS-QUALITY-FOR-YOUR-VOICE.md](docs/TTS-QUALITY-FOR-YOUR-VOICE.md) | 用在自己声音上的步骤、评估方法与常见错误 |
+
 ## 文档
 
 | 文档 | 内容 |

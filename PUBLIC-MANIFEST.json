@@ -1,0 +1,143 @@
+{
+  "version": "nf43-r4-hf90-rep-final",
+  "artifact_type": "postprocess_recipe",
+  "new_trainable_weights": false,
+  "summary": "NF43 global denoise + optional R4 local spectral cleanup + optional HF90 high-band attenuation, applied to synthesized speech.",
+  "license": "MIT (repository LICENSE); FFmpeg and Python/NumPy keep their own licenses",
+  "frozen_reference": {
+    "private_regression_sha256": "5a482dc0568c9e5c9e2a6e8df9f4d0a8b46dd346b1e90cd4bf61780a437b5351",
+    "baseline_private_sha256": "f3381c3f3072b77f6f64db8a189d5b3c0c4cfb879a46d762f9adf552797f0a3d",
+    "audio_included": false,
+    "reproducible_publicly": false,
+    "note": "Regression audio is not published; the hashes are provenance records only."
+  },
+  "test_environment": {
+    "node": "v18.18.1",
+    "python": "3.9.13",
+    "numpy": true,
+    "ffmpeg_local": "4.3.2",
+    "commands": [
+      "npm run verify",
+      "python tests/quality/test_denoise.py",
+      "node --test tests/quality/r4-dsp.test.cjs tests/quality/r4-wrapper.test.cjs"
+    ],
+    "results": {
+      "npm_run_verify": "51/51 pass",
+      "python_denoise_tests": "8/8 pass",
+      "node_quality_tests": "12/12 pass"
+    },
+    "skipped": [
+      "private frozen-sample regression (requires unpublished audio)",
+      "real TTS synthesis",
+      "QQ sending"
+    ]
+  },
+  "verification_boundary": [
+    "No proof that arbitrary new sentences reach the same perceived quality with global parameters only.",
+    "No proof that the production noise complaint is resolved; paired before/after audio for one request was not available.",
+    "0.90 is a high-band amplitude coefficient, not a measured 10% breath reduction.",
+    "Band energy reduction is not true SNR improvement; RMS matching is not perceptual loudness normalization."
+  ],
+  "files": [
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 5802,
+      "sha256": "c83130d0ca101eaef356ebe0abb9b66ca8760f3d27aaebe302174925e253b9c2"
+    },
+    {
+      "path": "docs/TTS-QUALITY-FOR-YOUR-VOICE.md",
+      "bytes": 3389,
+      "sha256": "eafbcc15e928a61bfd620d154941785e973abba4061e745dda101926fd288766"
+    },
+    {
+      "path": "docs/TTS-QUALITY-REP-FINAL.md",
+      "bytes": 3636,
+      "sha256": "4e3da05b8449c1f1f10e8adf0d0c2b35a1acc05f0ae67adc6ae367b64ff90172"
+    },
+    {
+      "path": "docs/TTS-QUALITY-VALIDATION.md",
+      "bytes": 2397,
+      "sha256": "7983386edc0a02ee4c25dcc0ffeed15fd7989f0e0b241249d5d28291255f246c"
+    },
+    {
+      "path": "packages/voice-out/quality/__pycache__/denoise.cpython-39.pyc",
+      "bytes": 8068,
+      "sha256": "98269b20fb6355b55709c1a557611c9abd4fb701e21c276e24ea76ad73cfe9f1"
+    },
+    {
+      "path": "packages/voice-out/quality/denoise.py",
+      "bytes": 8051,
+      "sha256": "1641e5997c1e6f01110c179b4cadfb704ebf28ef5a4b50acece74aca53753a32"
+    },
+    {
+      "path": "packages/voice-out/quality/examples/regions.example.json",
+      "bytes": 335,
+      "sha256": "61c6d779e14400e732ff9eab3db2b7c6b7754b7d71472954f31ed09be446d646"
+    },
+    {
+      "path": "packages/voice-out/quality/postprocess.cjs",
+      "bytes": 3716,
+      "sha256": "a67f10f6bd062de9eb61778c83f22f6e2893cef54de1a1ffb7ef1f8e9477acaf"
+    },
+    {
+      "path": "packages/voice-out/quality/presets/nf43-r4-hf90-rep-final.json",
+      "bytes": 1338,
+      "sha256": "a5100c1b9d6656bc97457f2b6639d7a55ab6281116cfaef24014b19b454963e1"
+    },
+    {
+      "path": "packages/voice-out/quality/r4/apply.mjs",
+      "bytes": 3643,
+      "sha256": "b3d0a310a74237a852846c38e2c5d67283582c15808604d600e7cc648a7485b3"
+    },
+    {
+      "path": "packages/voice-out/quality/r4/nf43-local-mask.mjs",
+      "bytes": 2659,
+      "sha256": "2d5467c83de55f2cffd734f06d1dd4cce7ac68881fc94a02d5161b7e015db8d4"
+    },
+    {
+      "path": "packages/voice-out/quality/r4/nf43-r4.mjs",
+      "bytes": 9382,
+      "sha256": "1348366f401b0e37d488b3e82688ffbc4a77d0e2060aab60668e1f49dd88c0f0"
+    },
+    {
+      "path": "packages/voice-out/quality/r4/r4.cjs",
+      "bytes": 3658,
+      "sha256": "64c159195f4cd3eb32791f0898431d9cc0b93abddcd2d8a9153b0557e010f329"
+    },
+    {
+      "path": "packages/voice-out/quality/r4/wav-utils.mjs",
+      "bytes": 2781,
+      "sha256": "e07e74bf75b7a2df6a0b5bb9792ad2dd27a3e9f017aad5f64981bd5ce3d987a9"
+    },
+    {
+      "path": "packages/voice-out/quality/README.md",
+      "bytes": 3843,
+      "sha256": "a3fa04ea7b0ab2bea71e34e93b86f753945d93d462b58b765eb032e2d25daa6f"
+    },
+    {
+      "path": "packages/voice-out/quality/requirements.txt",
+      "bytes": 12,
+      "sha256": "c6f8bc70b65508ef9f4ba126981126fff07d5e8bc17ad8ced50591d2a3760af4"
+    },
+    {
+      "path": "README.md",
+      "bytes": 9007,
+      "sha256": "1d4e4b257c01cf3515e936f9ff2d254ecd38918118403f6206a9641182c28164"
+    },
+    {
+      "path": "tests/quality/r4-dsp.test.cjs",
+      "bytes": 3458,
+      "sha256": "4c8128b93148962528a7195ea627172e21a24c9ab4f0de4bb01815a5da9e9484"
+    },
+    {
+      "path": "tests/quality/r4-wrapper.test.cjs",
+      "bytes": 3642,
+      "sha256": "5118f58f6723320af89814946d0d41c7550b5e38b7f6ab6e36614a4cc251dec8"
+    },
+    {
+      "path": "tests/quality/test_denoise.py",
+      "bytes": 4371,
+      "sha256": "f3715f491735622db90bc42bf91957a44a9071e536f784672c518eb6dbbef3e4"
+    }
+  ]
+}
