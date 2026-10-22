@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-onvoice-chat",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": false,
   "type": "module",
   "description": "Voice I/O and chat-persona bundle for a QQ auto-chat agent on DeepSeek Harness",
