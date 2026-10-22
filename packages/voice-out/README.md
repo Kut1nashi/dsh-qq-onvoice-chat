@@ -67,3 +67,5 @@ node cli/send-voice.mjs check <音频>
 音频内核里有个坑值得知道：**ffprobe 结果写临时文件，不走 stdout 管道**。
 原因是 DSH 的受限沙箱（workspace-write / 只读）里 `spawn` 一个 `stdio: 'pipe'` 的子进程会直接
 `EPERM`，而"继承 stdio + 写文件"是允许的。改这段代码时别顺手改回管道。
+stdout现在直接重定向到Node打开的临时文件描述符，不使用旧版ffprobe不支持的 `-o`。
+可用 `node scripts/check-audio-probe.mjs <已有WAV> <ffprobe路径>` 只读核验探测和时长上限，见[复测说明](../../docs/DS-FFPROBE-TEST.md)。
