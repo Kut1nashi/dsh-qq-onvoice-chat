@@ -1,0 +1,42 @@
+{
+  "version": "nf43-r4-hf90-rep-final",
+  "artifact_type": "postprocess_recipe",
+  "new_trainable_weights": false,
+  "description": "Post-processing recipe for synthesized speech: one global afftdn NF43 pass, then optional local spectral cleanup and HF90 attenuation on caller-provided time regions.",
+  "global": {
+    "filter": "afftdn=nr=12:nf=-43:tn=0",
+    "input_format": "48kHz/mono/PCM16",
+    "eof_guard_frames": 4800,
+    "max_lag_samples": 2400,
+    "anchor_threshold_dbfs": -35.0,
+    "window_ms": 20,
+    "max_level_correction_db": 1.0
+  },
+  "r4": {
+    "fft_size": 2048,
+    "hop": 512,
+    "window": "hann",
+    "proxy_percentile": 15,
+    "proxy_min_rms_dbfs": -65.0,
+    "wiener_subtraction": 0.6,
+    "freq_smooth_bins": 5,
+    "time_smooth_weights": [0.25, 0.5, 0.25],
+    "weak_bin_floor": 0.9,
+    "preserve_below_hz": 160,
+    "strong_bin_gain": 0.995,
+    "max_level_correction_db": 0.3,
+    "fade_ms": 40
+  },
+  "hf90": {
+    "taps": 129,
+    "cutoff_hz": 6000,
+    "coefficient": 0.9,
+    "fade_ms": 40
+  },
+  "default_regions": [],
+  "notes": [
+    "Regions are per-recording and must be supplied by the caller; there is no automatic region detection.",
+    "0.90 is a high-band amplitude coefficient, not a measured 10% breath reduction.",
+    "Do not run the global NF43 pass twice on the same audio."
+  ]
+}

@@ -56,3 +56,5 @@ Thumbs.db
 # TTS quality comparison materials (docs only, not the bridge audio library)
 !docs/tts-quality/20261018/audio/
 !docs/tts-quality/20261018/audio/*.wav
+__pycache__/
+*.pyc

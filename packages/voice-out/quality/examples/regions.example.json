@@ -1,0 +1,8 @@
+{
+  "sample": "example",
+  "baseline_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "windows": [
+    { "start": 2.5, "end": 4.5, "highFloor": 0.94, "hf90": false, "note": "moderate cleanup" },
+    { "start": 7.5, "end": 9.5, "highFloor": 1.0, "hf90": true, "note": "extra high-band attenuation" }
+  ]
+}
