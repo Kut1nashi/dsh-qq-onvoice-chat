@@ -1,0 +1,122 @@
+[
+  {
+    "n": 1,
+    "case": "S1",
+    "ref": "R0",
+    "seed": 123,
+    "ms": 6829,
+    "bytes": 442028,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\S1_R0.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\tts-1792323362191-g0o5su.wav"
+  },
+  {
+    "n": 2,
+    "case": "S1",
+    "ref": "R1",
+    "seed": 123,
+    "ms": 6920,
+    "bytes": 464222,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\S1_R1.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\tts-1792323369125-1smf1i.wav"
+  },
+  {
+    "n": 3,
+    "case": "S1",
+    "ref": "R2",
+    "seed": 123,
+    "ms": 6425,
+    "bytes": 364654,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\S1_R2.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\tts-1792323375556-h6wnoh.wav"
+  },
+  {
+    "n": 4,
+    "case": "S2",
+    "ref": "R1",
+    "seed": 123,
+    "ms": 78025,
+    "bytes": 1362120,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\S2_R1.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\tts-1792323453571-u392qx.wav"
+  },
+  {
+    "n": 5,
+    "case": "S2",
+    "ref": "R2",
+    "seed": 123,
+    "ms": 103131,
+    "bytes": 1075478,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\S2_R2.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\tts-1792323556702-93s1pl.wav"
+  },
+  {
+    "n": 6,
+    "case": "S2",
+    "ref": "R0",
+    "seed": 123,
+    "ms": 87622,
+    "bytes": 1109284,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\S2_R0.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\tts-1792323644329-8nz7k4.wav"
+  },
+  {
+    "n": 7,
+    "case": "S3",
+    "ref": "R2",
+    "seed": 123,
+    "ms": 21716,
+    "bytes": 1214552,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\S3_R2.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\tts-1792323666050-o2vy4d.wav"
+  },
+  {
+    "n": 8,
+    "case": "S3",
+    "ref": "R0",
+    "seed": 123,
+    "ms": 68710,
+    "bytes": 1210696,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\S3_R0.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\tts-1792323734752-sn51ip.wav"
+  },
+  {
+    "n": 9,
+    "case": "S3",
+    "ref": "R1",
+    "seed": 123,
+    "ms": 94843,
+    "bytes": 1306432,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\S3_R1.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\tts-1792323829603-9mnnjp.wav"
+  },
+  {
+    "n": 10,
+    "case": "S4",
+    "ref": "R0",
+    "seed": 123,
+    "ms": 11889,
+    "bytes": 791106,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\S4_R0.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R0\\tts-1792323841502-oni0wr.wav"
+  },
+  {
+    "n": 11,
+    "case": "S4",
+    "ref": "R2",
+    "seed": 123,
+    "ms": 34275,
+    "bytes": 758794,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\S4_R2.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R2\\tts-1792323875773-t6h4c6.wav"
+  },
+  {
+    "n": 12,
+    "case": "S4",
+    "ref": "R1",
+    "seed": 123,
+    "ms": 40039,
+    "bytes": 934776,
+    "file": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\S4_R1.wav",
+    "source_path": "D:\\needy-voice\\out\\20261018-quality-v2\\R1\\tts-1792323915811-39cotx.wav"
+  }
+]

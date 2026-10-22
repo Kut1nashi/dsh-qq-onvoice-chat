@@ -1,0 +1,14 @@
+{
+  "R0": {
+    "wav": "D:/needy-voice/ref/sally_ref.wav",
+    "txt": "D:/needy-voice/ref/sally_ref.txt"
+  },
+  "R1": {
+    "wav": "D:/needy-voice/ref/a12_ref.wav",
+    "txt": "D:/needy-voice/ref/a12_ref.txt"
+  },
+  "R2": {
+    "wav": "D:/needy-voice/ref/sally_ref_a06.wav",
+    "txt": "D:/needy-voice/ref/sally_ref_a06.txt"
+  }
+}
