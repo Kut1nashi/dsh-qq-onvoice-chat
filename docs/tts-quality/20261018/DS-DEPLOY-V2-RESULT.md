@@ -82,7 +82,7 @@ exit=1
 ## 6. 回滚
 
 ```powershell
-cd D:\Deeeeeepseeeeek\workfile\qq-bridge-src\qq-bridge-main
+cd <your-bridge-root>
 copy src\bridge.js.bak-20261018-173706-before-v2 src\bridge.js   # 恢复到 fde1b7b5…c4075
 node --check src\bridge.js
 # 按原方式重启 bridge

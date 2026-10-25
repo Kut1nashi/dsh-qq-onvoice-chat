@@ -22,7 +22,7 @@
 | --- | --- |
 | 本机环境 | Windows、Node 18.18.1、RTX 3050 Ti Laptop 4GB、GPT-SoVITS v4、SnowLuma runtime 1.14.20；以本机实际版本为准 |
 | 实际 TTS 模块 | `D:/needy-voice/tts-core.cjs`，属于部署专用旧适配器，不能直接用公共仓库文件覆盖 |
-| 实际 bridge | `D:/Deeeeeepseeeeek/workfile/qq-bridge-src/qq-bridge-main`，日语语音＋中文译文，保留常态/担心/开心参考方案及现有语速设定 |
+| 实际 bridge | `<your-bridge-root>`，日语语音＋中文译文，保留常态/担心/开心参考方案及现有语速设定 |
 | 已部署 v2 bridge SHA256 | `119d506a23a9f966f6461c2dc2b4ec4b6f461ad6e9a38a2443f1161cb0e6107d` |
 | 已部署共享内核 SHA256 | `f2392e4589cf10d0e5448304818b57bca83b4a35403264b8527348e0e8da7b93` |
 | ffprobe | `D:/needy-voice/GPT-SoVITS-v4-20250529/ffprobe.exe`，2022-04-07 构建；报告已验证 7.576438 秒 WAV 和低阈值拒绝 |
@@ -45,9 +45,9 @@
 可在确认路径后使用以下 PowerShell 命令记录基线：
 
 ```powershell
-$bridgeRoot = 'D:\Deeeeeepseeeeek\workfile\qq-bridge-src\qq-bridge-main'
-$ttsEngine = 'D:\needy-voice\tts-core.cjs'
-$probeBinary = 'D:\needy-voice\GPT-SoVITS-v4-20250529\ffprobe.exe'
+$bridgeRoot = '<your-bridge-root>'
+$ttsEngine = '<your-tts-core>/tts-core.cjs'
+$probeBinary = '<your-gpt-sovits>/ffprobe.exe'
 node --version
 Get-FileHash -LiteralPath "$bridgeRoot\src\bridge.js" -Algorithm SHA256
 Get-FileHash -LiteralPath "$bridgeRoot\src\voice-core.js" -Algorithm SHA256

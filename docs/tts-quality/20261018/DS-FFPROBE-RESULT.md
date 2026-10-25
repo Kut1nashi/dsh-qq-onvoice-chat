@@ -84,7 +84,7 @@ node scripts/send-voice.mjs check "D:/needy-voice/out/tts-1792306268998-p8og0o.w
 ## 6. 回滚
 
 ```powershell
-cd D:\Deeeeeepseeeeek\workfile\qq-bridge-src\qq-bridge-main
+cd <your-bridge-root>
 copy src\voice-core.js.bak-20261018-183353-before-ffprobe-fix src\voice-core.js
 node --check src\voice-core.js
 # 按原方式重启 bridge（v2 的 src/bridge.js 不受影响）
